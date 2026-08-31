@@ -15,8 +15,10 @@ const geistMono = Geist_Mono({
 
 export const metadata: Metadata = {
   title: "MiniMax H3 Studio",
-  description:
-    "本地视频创作工具，通过 ComfyUI 调用本机 MiniMax H3 工作流。",
+  description: "本地视频创作工具，通过 ComfyUI 调用本机 MiniMax H3 工作流。",
+  icons: {
+    icon: "/favicon.svg",
+  },
 }
 
 export default function RootLayout({ children }: LayoutProps<"/">) {
@@ -25,7 +27,10 @@ export default function RootLayout({ children }: LayoutProps<"/">) {
       lang="zh-CN"
       className={`${geistSans.variable} ${geistMono.variable} dark h-full antialiased`}
     >
-      <body className="flex min-h-full flex-col font-sans">
+      <body className="relative z-0 flex min-h-[100dvh] flex-col font-sans">
+        <a href="#studio-main" className="skip-link">
+          跳到出片区
+        </a>
         <Providers>{children}</Providers>
       </body>
     </html>

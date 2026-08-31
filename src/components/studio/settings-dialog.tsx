@@ -33,8 +33,7 @@ import {
   SelectValue,
 } from "@/components/ui/select"
 import { ScrollArea } from "@/components/ui/scroll-area"
-import { Separator } from "@/components/ui/separator"
-import { Badge } from "@/components/ui/badge"
+import { cn } from "@/lib/utils"
 import type {
   FieldMapping,
   MappingOverrides,
@@ -110,7 +109,7 @@ export function SettingsDialog({
     return bundle.nodes.flatMap((node) =>
       node.inputs.map((input) => ({
         value: `${node.id}::${input}`,
-        label: `${node.id} · ${node.title || node.classType} / ${input}`,
+        label: `#${node.id} ${node.title || node.classType} / ${input}`,
       }))
     )
   }, [bundle])
@@ -118,7 +117,7 @@ export function SettingsDialog({
   async function savePort() {
     const next = Number(portInputRef.current?.value ?? port)
     if (!Number.isInteger(next) || next < 1 || next > 65535) {
-      toast.error("端口必须是 1–65535 的整数")
+      toast.error("端口必须是 1-65535 的整数")
       return
     }
     setSaving(true)
@@ -200,22 +199,24 @@ export function SettingsDialog({
                 {connected ? "已连接" : "未连接"}。
               </FieldDescription>
             </Field>
-            <div className="flex flex-wrap gap-2">
+            <div className="flex flex-wrap items-center gap-3">
               <Button asChild variant="outline">
                 <a href={comfyUrl} target="_blank" rel="noreferrer">
                   <FolderOpenIcon data-icon="inline-start" />
                   打开 ComfyUI
                 </a>
               </Button>
-              <Badge variant={connected ? "secondary" : "destructive"}>
+              <span className="flex items-center gap-2 font-mono text-[11px] tabular-nums text-muted-foreground">
+                <span
+                  className={cn("size-1.5 rounded-full", connected ? "lamp-live" : "lamp-off")}
+                  aria-hidden="true"
+                />
                 {connected ? "已连接" : "未连接"}
-              </Badge>
+              </span>
             </div>
           </FieldGroup>
 
-          <Separator />
-
-          <FieldGroup>
+          <FieldGroup className="border-t pt-5">
             <Field>
               <FieldLabel>工作流</FieldLabel>
               <FieldDescription>
@@ -258,12 +259,12 @@ export function SettingsDialog({
                     key={name}
                     className="flex items-center justify-between gap-2 rounded-lg border px-3 py-2"
                   >
-                    <span className="truncate text-sm">
-                      {name}
+                    <span className="flex min-w-0 items-center gap-2 truncate text-sm">
+                      <span className="truncate">{name}</span>
                       {name === workflowName ? (
-                        <Badge className="ml-2" variant="secondary">
+                        <span className="shrink-0 font-mono text-[11px] text-primary">
                           当前
-                        </Badge>
+                        </span>
                       ) : null}
                     </span>
                     <Button
@@ -287,9 +288,7 @@ export function SettingsDialog({
             )}
           </FieldGroup>
 
-          <Separator />
-
-          <FieldGroup>
+          <FieldGroup className="border-t pt-5">
             <Field>
               <FieldLabel>字段映射</FieldLabel>
               <FieldDescription>

@@ -18,7 +18,7 @@ export async function PUT(request: Request) {
   const current = await readSettings()
   const port = Number(body.comfyPort)
   if (!Number.isInteger(port) || port < 1 || port > 65535) {
-    return Response.json({ error: "端口必须是 1–65535 的整数" }, { status: 400 })
+    return Response.json({ error: "端口必须是 1-65535 的整数" }, { status: 400 })
   }
   const next = await writeSettings({
     ...current,
