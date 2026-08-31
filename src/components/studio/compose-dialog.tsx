@@ -44,6 +44,7 @@ export function ComposeDialog({
       <DialogContent
         showCloseButton={false}
         className="pointer-events-none top-0 left-0 flex h-dvh w-screen max-w-none translate-x-0 translate-y-0 items-center justify-center gap-0 overflow-visible rounded-none bg-transparent p-0 shadow-none ring-0 sm:max-w-none"
+        onOpenAutoFocus={(event) => event.preventDefault()}
         onPointerDownOutside={(event) => {
           const target = event.target as HTMLElement | null
           if (target?.closest("[data-prompt-guide]")) event.preventDefault()

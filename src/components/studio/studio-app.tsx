@@ -541,9 +541,6 @@ export function StudioApp() {
             <h1 className="font-heading text-lg font-semibold tracking-tight text-pretty">
               MiniMax H3 Studio
             </h1>
-            <p className="max-w-[48ch] text-xs leading-relaxed text-muted-foreground text-pretty">
-              本机 ComfyUI 出片台
-            </p>
           </div>
         </div>
         <div className="flex flex-wrap items-center gap-2">

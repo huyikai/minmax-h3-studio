@@ -25,7 +25,7 @@ export function FieldHelp({
       >
         <CircleHelpIcon className="size-3.5" />
       </TooltipTrigger>
-      <TooltipContent side="top" className="max-w-[42ch] text-pretty leading-relaxed">
+      <TooltipContent side="top" sideOffset={6} className="z-[80] max-w-[42ch] text-pretty leading-relaxed">
         {children}
       </TooltipContent>
     </Tooltip>
