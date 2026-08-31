@@ -5,7 +5,6 @@ import { createPortal } from "react-dom"
 import { CopyIcon, ExternalLinkIcon, PinIcon, PinOffIcon } from "lucide-react"
 import { toast } from "sonner"
 import { Button } from "@/components/ui/button"
-import { ScrollArea } from "@/components/ui/scroll-area"
 import {
   Sheet,
   SheetContent,
@@ -31,12 +30,14 @@ import {
 type PromptGuideProps = {
   open: boolean
   pinned: boolean
-  compact: boolean
   mode: GuideMode
   duration: number
   prompt: string
   textareaRef: React.RefObject<HTMLTextAreaElement | null>
-  monitorRef: React.RefObject<HTMLElement | null>
+  disabled?: boolean
+  compact?: boolean
+  docked?: boolean
+  monitorRef?: React.RefObject<HTMLElement | null>
   onPinnedChange: (pinned: boolean) => void
   onClose: () => void
   onApply: (next: string, selection: { start: number; end: number }) => void
@@ -45,11 +46,13 @@ type PromptGuideProps = {
 export function PromptGuide({
   open,
   pinned,
-  compact,
   mode,
   duration,
   prompt,
   textareaRef,
+  disabled,
+  compact = false,
+  docked = false,
   monitorRef,
   onPinnedChange,
   onClose,
@@ -68,10 +71,10 @@ export function PromptGuide({
   }, [])
 
   useLayoutEffect(() => {
-    if (!open || !desktop) return
+    if (!open || !desktop || docked) return
     function update() {
       if (compact) {
-        const monitor = monitorRef.current?.getBoundingClientRect()
+        const monitor = monitorRef?.current?.getBoundingClientRect()
         if (monitor) {
           setBox(
             new DOMRect(
@@ -105,7 +108,7 @@ export function PromptGuide({
       window.removeEventListener("resize", update)
       window.removeEventListener("scroll", update, true)
     }
-  }, [open, desktop, compact, textareaRef, monitorRef])
+  }, [open, desktop, compact, docked, textareaRef, monitorRef])
 
   useEffect(() => {
     if (!open || pinned) return
@@ -120,6 +123,7 @@ export function PromptGuide({
   }, [open, pinned, onClose, textareaRef])
 
   function insert(id: GuideSectionId) {
+    if (disabled) return
     const result = applySectionInsert(prompt, mode, id, duration)
     onApply(result.text, result.selection)
   }
@@ -139,6 +143,7 @@ export function PromptGuide({
       duration={duration}
       compact={compact && desktop}
       pinned={pinned}
+      disabled={disabled}
       onPinnedChange={onPinnedChange}
       onInsert={insert}
       onCopy={() => void copyPack()}
@@ -160,7 +165,8 @@ export function PromptGuide({
       >
         <SheetContent
           side="bottom"
-          className="max-h-[70dvh] gap-0 p-0"
+          data-prompt-guide=""
+          className="z-[70] max-h-[70dvh] gap-0 overflow-hidden p-0"
           showCloseButton
           onOpenAutoFocus={(event) => event.preventDefault()}
         >
@@ -170,9 +176,34 @@ export function PromptGuide({
               点英文骨架写入提示词。灰色中文只对照，不会插入。
             </SheetDescription>
           </SheetHeader>
-          <div className="min-h-0 flex-1 overflow-y-auto p-4">{body}</div>
+          <div
+            data-prompt-guide-scroll=""
+            className="min-h-0 flex-1 overflow-y-auto overscroll-contain p-4"
+          >
+            {body}
+          </div>
         </SheetContent>
       </Sheet>
+    )
+  }
+
+  if (docked) {
+    return (
+      <div
+        ref={panelRef}
+        data-prompt-guide=""
+        role="complementary"
+        aria-label="提示词写法"
+        className="pointer-events-auto flex w-80 min-h-0 shrink-0 flex-col overflow-hidden rounded-xl border bg-card/95 shadow-lg"
+        onMouseDown={(event) => {
+          const target = event.target as HTMLElement
+          if (target.closest("a")) return
+          if (target.closest("[data-prompt-guide-scroll]")) return
+          event.preventDefault()
+        }}
+      >
+        {body}
+      </div>
     )
   }
 
@@ -181,10 +212,11 @@ export function PromptGuide({
   return createPortal(
     <div
       ref={panelRef}
+      data-prompt-guide=""
       role="complementary"
       aria-label="提示词写法"
       className={cn(
-        "fixed z-40 overflow-hidden rounded-xl border bg-card/95 shadow-lg backdrop-blur-sm",
+        "fixed z-[70] overflow-hidden rounded-xl border bg-card/95 shadow-lg backdrop-blur-sm",
         compact && "cursor-pointer"
       )}
       style={{
@@ -196,8 +228,7 @@ export function PromptGuide({
       onMouseDown={(event) => {
         const target = event.target as HTMLElement
         if (target.closest("a")) return
-        const slot = target.closest("[data-slot]")
-        if (slot?.getAttribute("data-slot") === "scroll-area-thumb") return
+        if (target.closest("[data-prompt-guide-scroll]")) return
         event.preventDefault()
       }}
     >
@@ -212,6 +243,7 @@ function GuideBody({
   duration,
   compact,
   pinned,
+  disabled,
   onPinnedChange,
   onInsert,
   onCopy,
@@ -220,6 +252,7 @@ function GuideBody({
   duration: number
   compact: boolean
   pinned: boolean
+  disabled?: boolean
   onPinnedChange: (pinned: boolean) => void
   onInsert: (id: GuideSectionId) => void
   onCopy: () => void
@@ -271,7 +304,10 @@ function GuideBody({
           生成中已收到角上，避免挡住进度。
         </p>
       ) : (
-        <ScrollArea className="min-h-0 flex-1">
+        <div
+          data-prompt-guide-scroll=""
+          className="min-h-0 flex-1 overflow-y-auto overscroll-contain"
+        >
           <div className="flex flex-col gap-3 p-3">
             <ul className="list-disc space-y-1.5 pl-4 text-xs leading-relaxed text-muted-foreground">
               {rules.map((rule) => (
@@ -283,7 +319,13 @@ function GuideBody({
                 <button
                   key={section.id}
                   type="button"
-                  className="rounded-md border border-border/80 bg-monitor/40 p-2.5 text-left transition-colors hover:border-primary/50 hover:bg-primary/5"
+                  disabled={disabled}
+                  className={cn(
+                    "rounded-md border border-border/80 bg-monitor/40 p-2.5 text-left transition-colors",
+                    disabled
+                      ? "cursor-not-allowed opacity-60"
+                      : "hover:border-primary/50 hover:bg-primary/5"
+                  )}
                   onClick={() => onInsert(section.id)}
                 >
                   <span className="flex flex-wrap items-baseline gap-x-2 gap-y-0.5">
@@ -312,7 +354,7 @@ function GuideBody({
               点英文骨架写入输入框。已经有的字段会选中，不会再插一份。灰色中文不会写进去。
             </p>
           </div>
-        </ScrollArea>
+        </div>
       )}
     </div>
   )

@@ -6,18 +6,13 @@ import {
   ClapperboardIcon,
   DownloadIcon,
   ExternalLinkIcon,
-  PlayIcon,
+  PlusIcon,
   RefreshCwIcon,
   Settings2Icon,
   SquareIcon,
 } from "lucide-react"
 import { Button } from "@/components/ui/button"
-import { Textarea } from "@/components/ui/textarea"
-import { Input } from "@/components/ui/input"
-import { Switch } from "@/components/ui/switch"
-import { Slider } from "@/components/ui/slider"
 import { Progress } from "@/components/ui/progress"
-import { Spinner } from "@/components/ui/spinner"
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert"
 import {
   Empty,
@@ -28,21 +23,6 @@ import {
   EmptyTitle,
 } from "@/components/ui/empty"
 import {
-  Field,
-  FieldDescription,
-  FieldGroup,
-} from "@/components/ui/field"
-import {
-  Select,
-  SelectContent,
-  SelectGroup,
-  SelectItem,
-  SelectLabel,
-  SelectTrigger,
-  SelectValue,
-} from "@/components/ui/select"
-import { ToggleGroup, ToggleGroupItem } from "@/components/ui/toggle-group"
-import {
   AlertDialog,
   AlertDialogAction,
   AlertDialogCancel,
@@ -52,18 +32,18 @@ import {
   AlertDialogHeader,
   AlertDialogTitle,
 } from "@/components/ui/alert-dialog"
-import { LabelWithHelp } from "@/components/studio/field-help"
-import { MediaSlots, type SlotFile } from "@/components/studio/media-slots"
+import { ComposeDialog } from "@/components/studio/compose-dialog"
+import { ComposeForm } from "@/components/studio/compose-form"
 import { PromptGuide } from "@/components/studio/prompt-guide"
+import { type SlotFile } from "@/components/studio/media-slots"
 import {
-  ReferenceSlots,
   taggedRefs,
   type RefDraft,
 } from "@/components/studio/reference-slots"
 import { SettingsDialog } from "@/components/studio/settings-dialog"
+import { TaskList, isBusyJob, statusLabel } from "@/components/studio/task-list"
 import type { WorkflowBundle } from "@/components/studio/types"
 import type { HealthStatus, LoraFormValue, MediaKind, PublicJob } from "@/lib/types"
-import { ASPECT_PRESETS, DURATION_OPTIONS } from "@/lib/types"
 import type { WorkflowListItem } from "@/lib/default-workflows"
 import {
   REF_LIMITS,
@@ -74,8 +54,6 @@ import {
 } from "@/lib/refs"
 import { resolveGuideMode } from "@/lib/prompt-guide"
 import { cn } from "@/lib/utils"
-
-const PROMPT_PLACEHOLDER = "聚焦后右侧显示写法"
 
 function promptCoachHint(input: {
   hasFirstFrame: boolean
@@ -88,7 +66,7 @@ function promptCoachHint(input: {
     if (input.refTags.length) {
       return `已加 ${input.refTags.join("、")}。点开写法按段插入；提示词建议英文。`
     }
-    return "聚焦提示词查看写法。参考生先定义标签，再写画面。"
+    return "聚焦提示词，右侧对照写法。参考生先定义标签，再写画面。"
   }
   if (input.hasLastFrame) {
     return "首尾帧：先插入对齐句，再写两帧之间的过渡。聚焦后右侧可对照。"
@@ -104,21 +82,6 @@ function promptCoachHint(input: {
 
 function randomSeed() {
   return Math.floor(Math.random() * 1_000_000_000)
-}
-
-function statusLabel(job: PublicJob) {
-  switch (job.status) {
-    case "queued":
-      return "排队中"
-    case "running":
-      return "生成中"
-    case "success":
-      return "完成"
-    case "error":
-      return "失败"
-    case "interrupted":
-      return "已中断"
-  }
 }
 
 function MetaBits({ items }: { items: string[] }) {
@@ -157,6 +120,12 @@ export function StudioApp() {
   const [settingsOpen, setSettingsOpen] = useState(false)
   const [busyOpen, setBusyOpen] = useState(false)
   const [submitting, setSubmitting] = useState(false)
+  const [composeOpen, setComposeOpen] = useState(false)
+  const [composeMode, setComposeMode] = useState<"new" | "detail">("new")
+  const [composeJobId, setComposeJobId] = useState<string | null>(null)
+  const [deleteTarget, setDeleteTarget] = useState<PublicJob | null>(null)
+  const [guideOpen, setGuideOpen] = useState(false)
+  const [guidePinned, setGuidePinned] = useState(false)
 
   const [prompt, setPrompt] = useState("")
   const [duration, setDuration] = useState("5")
@@ -169,16 +138,11 @@ export function StudioApp() {
   const [loraFiles, setLoraFiles] = useState<string[]>([])
   const [slotFiles, setSlotFiles] = useState<Record<string, SlotFile>>({})
   const [refDrafts, setRefDrafts] = useState<RefDraft[]>([])
-  const [guideOpen, setGuideOpen] = useState(false)
-  const [guidePinned, setGuidePinned] = useState(false)
   const eventSourceRef = useRef<EventSource | null>(null)
   const textareaRef = useRef<HTMLTextAreaElement>(null)
-  const monitorRef = useRef<HTMLElement>(null)
 
   const connected = Boolean(health?.ok)
-  const busy = Boolean(
-    current && (current.status === "queued" || current.status === "running")
-  )
+  const busy = Boolean(current && isBusyJob(current))
 
   const loadHealth = useCallback(async () => {
     const response = await fetch("/api/health")
@@ -258,7 +222,7 @@ export function StudioApp() {
   }, [])
 
   const loadBundle = useCallback(
-    async (name: string) => {
+    async (name: string, options?: { keepValues?: boolean }) => {
       if (!name) {
         setBundle(null)
         return
@@ -267,6 +231,10 @@ export function StudioApp() {
       const json = (await response.json()) as WorkflowBundle & { error?: string }
       if (!response.ok) {
         toast.error(json.error ?? "读取工作流失败")
+        return
+      }
+      if (options?.keepValues) {
+        setBundle(json)
         return
       }
       applyBundle(json)
@@ -281,7 +249,7 @@ export function StudioApp() {
     source.onmessage = (event) => {
       const payload = JSON.parse(event.data) as { job: PublicJob | null }
       if (!payload.job) return
-      setCurrent(payload.job)
+      setCurrent((prev) => (prev?.id === payload.job!.id ? payload.job! : prev))
       setJobs((list) => {
         const rest = list.filter((item) => item.id !== payload.job!.id)
         return [payload.job!, ...rest]
@@ -305,9 +273,7 @@ export function StudioApp() {
     const response = await fetch("/api/jobs")
     const json = (await response.json()) as { jobs: PublicJob[] }
     setJobs(json.jobs)
-    const active = json.jobs.find(
-      (job) => job.status === "queued" || job.status === "running"
-    )
+    const active = json.jobs.find(isBusyJob)
     if (active) {
       setCurrent(active)
       listenJob(active.id)
@@ -436,13 +402,13 @@ export function StudioApp() {
       setCurrent(json.job)
       setJobs((list) => [json.job!, ...list.filter((item) => item.id !== json.job!.id)])
       listenJob(json.job.id)
+      setComposeOpen(false)
     } finally {
       setSubmitting(false)
     }
   }
 
   function fillFromJob(job: PublicJob) {
-    setCurrent(job)
     setPrompt(job.prompt)
     setDuration(String(job.duration))
     setAspect(job.aspect)
@@ -456,6 +422,61 @@ export function StudioApp() {
     }
   }
 
+  async function openNew() {
+    if (!workflowName) {
+      toast.error("请先导入工作流")
+      return
+    }
+    setComposeMode("new")
+    setComposeJobId(null)
+    await loadBundle(workflowName)
+    setPrompt("")
+    setRandomize(true)
+    setComposeOpen(true)
+  }
+
+  async function openDetail(job: PublicJob) {
+    const name = job.workflowFile
+      ? (WORKFLOW_ALIASES[job.workflowFile] ?? job.workflowFile)
+      : workflowName
+    setComposeMode("detail")
+    setComposeJobId(job.id)
+    setCurrent(job)
+    if (name && name !== workflowName) {
+      await loadBundle(name, { keepValues: true })
+    }
+    fillFromJob(job)
+    setSlotFiles((previous) => {
+      for (const item of Object.values(previous)) {
+        URL.revokeObjectURL(item.preview)
+      }
+      return {}
+    })
+    setRefDrafts((previous) => {
+      for (const item of previous) {
+        URL.revokeObjectURL(item.preview)
+      }
+      return []
+    })
+    setComposeOpen(true)
+  }
+
+  async function deleteJob(job: PublicJob) {
+    const response = await fetch(`/api/jobs/${job.id}`, { method: "DELETE" })
+    const json = (await response.json()) as { deleted?: boolean; error?: string }
+    if (!response.ok || !json.deleted) {
+      toast.error(json.error ?? "删除失败")
+      return
+    }
+    setJobs((list) => list.filter((item) => item.id !== job.id))
+    if (current?.id === job.id) setCurrent(null)
+    if (composeJobId === job.id) {
+      setComposeOpen(false)
+      setComposeJobId(null)
+    }
+    toast.success("已删除任务")
+  }
+
   const mappingHints = bundle
     ? [
         bundle.mapping.prompt ? "提示词" : null,
@@ -465,7 +486,7 @@ export function StudioApp() {
         bundle.mapping.duration ? "时长" : null,
         bundle.mapping.seed ? "seed" : null,
         bundle.mapping.loras.length ? `LoRA ×${bundle.mapping.loras.length}` : null,
-      ].filter(Boolean)
+      ].filter((item): item is string => Boolean(item))
     : []
 
   const durationSeconds = Number(duration) || 0
@@ -493,45 +514,23 @@ export function StudioApp() {
     dynamicRefs,
     durationSeconds,
   })
-  const guideVisible = guideOpen || guidePinned
   const hasSteps = Boolean(bundle?.mapping.steps)
   const hasCfg = Boolean(bundle?.mapping.cfg)
   const grouped = groupWorkflows(workflows)
   const currentWorkflow = workflows.find((item) => item.name === workflowName)
-
-  const generateBar = (
-    <div className="flex gap-2">
-      <Button
-        type="button"
-        size="lg"
-        className="h-11 flex-1"
-        disabled={busy || submitting || !workflowName}
-        onClick={() => void submit(false)}
-      >
-        {submitting || busy ? (
-          <Spinner data-icon="inline-start" />
-        ) : (
-          <PlayIcon data-icon="inline-start" />
-        )}
-        {busy ? "生成中" : "生成"}
-      </Button>
-      {busy ? (
-        <Button
-          type="button"
-          size="lg"
-          className="h-11"
-          variant="outline"
-          onClick={() => {
-            if (!current) return
-            void fetch(`/api/jobs/${current.id}`, { method: "DELETE" })
-          }}
-        >
-          <SquareIcon data-icon="inline-start" />
-          中断
-        </Button>
-      ) : null}
-    </div>
-  )
+  const activeJob = jobs.find(isBusyJob)
+  const composeJob = composeJobId
+    ? jobs.find((item) => item.id === composeJobId)
+    : undefined
+  const composeReadOnly = Boolean(composeMode === "detail" && composeJob && isBusyJob(composeJob))
+  const composeTitle = composeMode === "detail" ? "任务详情" : "新建任务"
+  const composeHint = composeReadOnly
+    ? "进行中不能改参数。要中断请先关掉，到监视器操作。"
+    : composeMode === "detail"
+      ? "会新开一条任务，不会改列表里这条。"
+      : "生成后会出现在左侧任务列表。"
+  const generateLabel = submitting ? "提交中" : "生成"
+  const generateDisabled = composeReadOnly || submitting || !workflowName
 
   return (
     <div className="flex min-h-[100dvh] flex-col">
@@ -583,9 +582,9 @@ export function StudioApp() {
         className="grid flex-1 grid-cols-1 lg:grid-cols-[minmax(20rem,24rem)_minmax(0,1fr)]"
       >
         <section className="relative flex min-h-0 flex-col border-b lg:max-h-[calc(100dvh-3.75rem)] lg:border-r lg:border-b-0">
-          <div className="min-h-0 flex-1 overflow-y-auto p-5 pb-6">
+          <div className="flex shrink-0 flex-col gap-3 border-b p-4">
             {!connected ? (
-              <Alert className="mb-5">
+              <Alert>
                 <AlertTitle>还没有连上 ComfyUI</AlertTitle>
                 <AlertDescription>
                   请在本机启动 ComfyUI（默认 8188），然后再生成。Studio
@@ -593,7 +592,6 @@ export function StudioApp() {
                 </AlertDescription>
               </Alert>
             ) : null}
-
             {workflows.length === 0 ? (
               <Empty className="border bg-card/40">
                 <EmptyHeader>
@@ -612,343 +610,60 @@ export function StudioApp() {
                 </EmptyContent>
               </Empty>
             ) : (
-              <FieldGroup>
-                <Field>
-                  <LabelWithHelp label="工作流">
-                    官方 20 步、Turbo 6 步，或参考生（另一套 Ref2VA 权重）。上传区随当前图上的节点出现。
-                  </LabelWithHelp>
-                  <Select
-                    value={workflowName}
-                    onValueChange={(name) => {
-                      setWorkflowName(name)
-                      void loadBundle(name)
-                    }}
-                  >
-                    <SelectTrigger className="w-full">
-                      <SelectValue placeholder="选择工作流" />
-                    </SelectTrigger>
-                    <SelectContent>
-                      {grouped.official.length > 0 ? (
-                        <SelectGroup>
-                          <SelectLabel>官方</SelectLabel>
-                          {grouped.official.map((item) => (
-                            <SelectItem key={item.name} value={item.name}>
-                              {item.label}
-                            </SelectItem>
-                          ))}
-                        </SelectGroup>
-                      ) : null}
-                      {grouped.turbo.length > 0 ? (
-                        <SelectGroup>
-                          <SelectLabel>Turbo LoRA</SelectLabel>
-                          {grouped.turbo.map((item) => (
-                            <SelectItem key={item.name} value={item.name}>
-                              {item.label}
-                            </SelectItem>
-                          ))}
-                        </SelectGroup>
-                      ) : null}
-                      {grouped.reference.length > 0 ? (
-                        <SelectGroup>
-                          <SelectLabel>参考生</SelectLabel>
-                          {grouped.reference.map((item) => (
-                            <SelectItem key={item.name} value={item.name}>
-                              {item.label}
-                            </SelectItem>
-                          ))}
-                        </SelectGroup>
-                      ) : null}
-                      {grouped.custom.length > 0 ? (
-                        <SelectGroup>
-                          <SelectLabel>我的</SelectLabel>
-                          {grouped.custom.map((item) => (
-                            <SelectItem key={item.name} value={item.name}>
-                              {item.label}
-                            </SelectItem>
-                          ))}
-                        </SelectGroup>
-                      ) : null}
-                    </SelectContent>
-                  </Select>
-                  <FieldDescription>
-                    {[
-                      currentWorkflow?.description,
-                      mappingHints.length
-                        ? `已识别：${mappingHints.join("、")}`
-                        : "未识别到常用字段，请到设置里手动映射",
-                    ]
-                      .filter(Boolean)
-                      .join(" ")}
-                  </FieldDescription>
-                </Field>
-
-                <Field>
-                  <div className="flex items-baseline justify-between gap-3">
-                    <LabelWithHelp htmlFor="prompt" label="提示词">
-                      正文建议英文。对白、歌词、画面上的字保留原文。观众配乐写在
-                      non_diegetic_music，没有就写 N/A。
-                    </LabelWithHelp>
-                    <span
-                      className="font-mono text-[11px] tabular-nums text-muted-foreground"
-                      aria-label={`字数 ${prompt.length}`}
-                    >
-                      {prompt.length}
-                    </span>
-                  </div>
-                  <Textarea
-                    ref={textareaRef}
-                    id="prompt"
-                    value={prompt}
-                    onChange={(event) => setPrompt(event.target.value)}
-                    onFocus={() => setGuideOpen(true)}
-                    placeholder={PROMPT_PLACEHOLDER}
-                    aria-describedby="prompt-hint"
-                    className="min-h-44"
-                  />
-                  <FieldDescription id="prompt-hint">{promptHint}</FieldDescription>
-                </Field>
-
-                <MediaSlots
-                  slots={mediaSlots}
-                  files={slotFiles}
-                  onChange={setSlotFile}
-                />
-
-                {dynamicRefs ? (
-                  <ReferenceSlots
-                    drafts={refDrafts}
-                    onAdd={addRefFiles}
-                    onRemove={removeRefDraft}
-                  />
-                ) : null}
-
-                <Field>
-                  <LabelWithHelp label="时长">
-                    成片大约几秒，会写入工作流的时长或帧数。13-15 秒要有一条清楚的动作推进。
-                  </LabelWithHelp>
-                  <ToggleGroup
-                    type="single"
-                    value={duration}
-                    onValueChange={(value) => {
-                      if (value) setDuration(value)
-                    }}
-                    variant="outline"
-                    size="sm"
-                    className="flex-wrap"
-                  >
-                    {DURATION_OPTIONS.map((item) => (
-                      <ToggleGroupItem
-                        key={item}
-                        value={String(item)}
-                        className="font-mono tabular-nums data-[state=on]:border-primary/70 data-[state=on]:bg-primary/15"
-                      >
-                        {item}s
-                      </ToggleGroupItem>
-                    ))}
-                  </ToggleGroup>
-                </Field>
-
-                <Field>
-                  <LabelWithHelp label="画幅">
-                    画面比例，对应工作流里的宽和高。选了会覆盖 JSON 里原来的分辨率。
-                  </LabelWithHelp>
-                  <ToggleGroup
-                    type="single"
-                    value={aspect}
-                    onValueChange={(value) => {
-                      if (value) setAspect(value)
-                    }}
-                    variant="outline"
-                    size="sm"
-                    className="flex-wrap"
-                  >
-                    {ASPECT_PRESETS.map((item) => (
-                      <ToggleGroupItem
-                        key={item.id}
-                        value={item.id}
-                        className="font-mono data-[state=on]:border-primary/70 data-[state=on]:bg-primary/15"
-                      >
-                        {item.label}
-                      </ToggleGroupItem>
-                    ))}
-                  </ToggleGroup>
-                </Field>
-
-                <Field>
-                  <LabelWithHelp htmlFor="seed" label="Seed">
-                    这是这次成片的编号。数字大小没有好坏，换一个等于重新抽一次构图和口气；提示词和参数不变时，同一个编号更容易长得像。默认每次换编号。看中了就关掉「随机」，锁住框里刚生成用过的那个数；或者点右侧历史里那一条，再生成就不会另抽。
-                  </LabelWithHelp>
-                  <div className="flex items-center gap-2">
-                    <Input
-                      id="seed"
-                      className="font-mono tabular-nums"
-                      inputMode="numeric"
-                      value={seed}
-                      onChange={(event) => setSeed(Number(event.target.value) || 0)}
-                      disabled={randomize}
-                    />
-                    <div className="flex items-center gap-2 whitespace-nowrap text-sm">
-                      <Switch
-                        checked={randomize}
-                        onCheckedChange={setRandomize}
-                        id="randomize"
-                      />
-                      <label htmlFor="randomize">随机</label>
-                    </div>
-                  </div>
-                </Field>
-
-                {hasSteps || hasCfg ? (
-                  <div
-                    className={cn(
-                      "grid gap-3",
-                      hasSteps && hasCfg ? "grid-cols-2" : "grid-cols-1"
-                    )}
-                  >
-                    {hasSteps ? (
-                      <Field>
-                        <LabelWithHelp htmlFor="steps" label="步数">
-                          采样步数。开了加速 LoRA 时偶尔要改，一般留空用工作流默认。
-                        </LabelWithHelp>
-                        <Input
-                          id="steps"
-                          className="font-mono tabular-nums"
-                          value={steps}
-                          onChange={(event) => setSteps(event.target.value)}
-                          placeholder="工作流默认"
-                        />
-                      </Field>
-                    ) : null}
-                    {hasCfg ? (
-                      <Field>
-                        <LabelWithHelp htmlFor="cfg" label="CFG">
-                          提示词约束强度。越大越听 prompt，太高容易发硬、不自然。常见默认约
-                          7。
-                        </LabelWithHelp>
-                        <Input
-                          id="cfg"
-                          className="font-mono tabular-nums"
-                          value={cfg}
-                          onChange={(event) => setCfg(event.target.value)}
-                          placeholder="工作流默认"
-                        />
-                      </Field>
-                    ) : null}
-                  </div>
-                ) : null}
-
-                {loras.length > 0 ? (
-                  <FieldGroup>
-                    {loras.map((lora, index) => (
-                      <Field key={`${lora.nodeId}-${index}`}>
-                        <LabelWithHelp label={`LoRA ${index + 1}`}>
-                          工作流里检测到的 LoRA（含 MiniMax H3 Turbo LoRA）。可开关、换文件、调强度。关掉等于强度为
-                          0，不会从节点图里删掉。
-                        </LabelWithHelp>
-                        <div className="flex items-center gap-2">
-                          <Switch
-                            checked={lora.enabled}
-                            onCheckedChange={(enabled) => {
-                              setLoras((list) =>
-                                list.map((item, i) =>
-                                  i === index ? { ...item, enabled } : item
-                                )
-                              )
-                            }}
-                          />
-                          <span className="text-sm">启用</span>
-                        </div>
-                        {loraFiles.length > 0 ? (
-                          <Select
-                            value={lora.name || undefined}
-                            onValueChange={(name) => {
-                              setLoras((list) =>
-                                list.map((item, i) =>
-                                  i === index ? { ...item, name } : item
-                                )
-                              )
-                            }}
-                            disabled={!lora.enabled}
-                          >
-                            <SelectTrigger className="w-full">
-                              <SelectValue placeholder="选择 LoRA 文件" />
-                            </SelectTrigger>
-                            <SelectContent>
-                              <SelectGroup>
-                                {loraFiles.map((name) => (
-                                  <SelectItem key={name} value={name}>
-                                    {name}
-                                  </SelectItem>
-                                ))}
-                              </SelectGroup>
-                            </SelectContent>
-                          </Select>
-                        ) : (
-                          <Input
-                            value={lora.name}
-                            disabled={!lora.enabled}
-                            onChange={(event) => {
-                              const name = event.target.value
-                              setLoras((list) =>
-                                list.map((item, i) =>
-                                  i === index ? { ...item, name } : item
-                                )
-                              )
-                            }}
-                          />
-                        )}
-                        <Slider
-                          min={0}
-                          max={2}
-                          step={0.05}
-                          value={[lora.strength]}
-                          disabled={!lora.enabled}
-                          onValueChange={(value) => {
-                            const strength = value[0] ?? 1
-                            setLoras((list) =>
-                              list.map((item, i) =>
-                                i === index ? { ...item, strength } : item
-                              )
-                            )
-                          }}
-                        />
-                        <FieldDescription className="font-mono tabular-nums">
-                          强度 {lora.strength.toFixed(2)}
-                        </FieldDescription>
-                      </Field>
-                    ))}
-                  </FieldGroup>
-                ) : null}
-
-              </FieldGroup>
+              <Button type="button" size="lg" className="h-11 w-full" onClick={() => void openNew()}>
+                <PlusIcon data-icon="inline-start" />
+                新建
+              </Button>
             )}
           </div>
           {workflows.length > 0 ? (
-            <div className="border-t bg-background/95 p-4">{generateBar}</div>
+            <div className="min-h-0 flex-1 overflow-y-auto p-3">
+              <TaskList
+                jobs={jobs}
+                currentId={current?.id}
+                onSelect={setCurrent}
+                onOpenDetail={(job) => void openDetail(job)}
+                onDelete={setDeleteTarget}
+              />
+            </div>
           ) : null}
         </section>
 
         <section
-          ref={monitorRef}
           className="flex min-h-0 flex-col gap-4 p-4 lg:max-h-[calc(100dvh-3.75rem)] lg:overflow-hidden"
         >
           <div className="flex min-h-72 flex-1 flex-col overflow-hidden rounded-xl border bg-card">
             <div className="flex items-center justify-between gap-3 border-b px-4 py-2.5">
               <span className="text-sm font-medium">成片</span>
-              {current ? (
-                <MetaBits
-                  items={[
-                    statusLabel(current),
-                    `${current.duration}s`,
-                    current.aspect,
-                    `seed ${current.seed}`,
-                  ]}
-                />
-              ) : (
-                <span className="font-mono text-[11px] tabular-nums text-muted-foreground">
-                  {aspect} {duration}s
-                </span>
-              )}
+              <div className="flex min-w-0 items-center gap-2">
+                {current ? (
+                  <MetaBits
+                    items={[
+                      statusLabel(current),
+                      `${current.duration}s`,
+                      current.aspect,
+                      `seed ${current.seed}`,
+                    ]}
+                  />
+                ) : (
+                  <span className="font-mono text-[11px] tabular-nums text-muted-foreground">
+                    {aspect} {duration}s
+                  </span>
+                )}
+                {activeJob ? (
+                  <Button
+                    type="button"
+                    size="sm"
+                    variant="outline"
+                    onClick={() => {
+                      void fetch(`/api/jobs/${activeJob.id}`, { method: "DELETE" })
+                    }}
+                  >
+                    <SquareIcon data-icon="inline-start" />
+                    中断
+                  </Button>
+                ) : null}
+              </div>
             </div>
             <div
               className={cn(
@@ -994,7 +709,7 @@ export function StudioApp() {
                 >
                   <p className="text-sm font-medium">还没有成片</p>
                   <p className="max-w-[36ch] text-sm leading-relaxed text-muted-foreground text-pretty">
-                    写好提示词后点生成。进度走 ComfyUI 的 websocket，成片会复制到
+                    点左侧新建，写好提示词后生成。进度走 ComfyUI 的 websocket，成片会复制到
                     outputs/ 目录。
                   </p>
                 </div>
@@ -1023,95 +738,97 @@ export function StudioApp() {
               </div>
             ) : null}
           </div>
-
-          <div className="flex min-h-0 flex-col">
-            <div className="mb-2 flex items-baseline justify-between gap-3 px-1">
-              <h2 className="text-sm font-medium">历史</h2>
-              <p className="text-xs text-muted-foreground">点一条即可回填再出</p>
-            </div>
-            {jobs.length === 0 ? (
-              <Empty className="rounded-xl border bg-card/40 py-8">
-                <EmptyHeader>
-                  <EmptyTitle>没有记录</EmptyTitle>
-                  <EmptyDescription>
-                    第一次生成成功后，提示词、参数和成片会留在这里。
-                  </EmptyDescription>
-                </EmptyHeader>
-              </Empty>
-            ) : (
-              <div className="-mx-1 overflow-x-auto px-1 pb-1">
-                <ul className="flex gap-2">
-                  {jobs.map((job, index) => (
-                    <li key={job.id} className="w-44 shrink-0">
-                      <button
-                        type="button"
-                        aria-current={current?.id === job.id ? "true" : undefined}
-                        className={cn(
-                          "flex w-full flex-col gap-2 rounded-lg border bg-card p-2 text-left transition-colors hover:bg-muted/60",
-                          current?.id === job.id && "border-primary/70 bg-primary/10"
-                        )}
-                        onClick={() => fillFromJob(job)}
-                      >
-                        <div className="relative aspect-video overflow-hidden rounded-md studio-letterbox">
-                          {job.outputUrl ? (
-                            <video
-                              src={job.outputUrl}
-                              muted
-                              playsInline
-                              preload="metadata"
-                              className="size-full object-cover"
-                            />
-                          ) : (
-                            <div className="flex size-full items-center justify-center font-mono text-[10px] text-muted-foreground">
-                              {statusLabel(job)}
-                            </div>
-                          )}
-                          <span className="absolute top-1.5 left-1.5 rounded bg-monitor/80 px-1 font-mono text-[10px] tabular-nums text-foreground/80">
-                            {String(index + 1).padStart(2, "0")}
-                          </span>
-                        </div>
-                        <span className="line-clamp-2 text-xs leading-snug">
-                          {job.prompt || "（无提示词）"}
-                        </span>
-                        <MetaBits items={[`${job.duration}s`, job.aspect]} />
-                      </button>
-                    </li>
-                  ))}
-                </ul>
-              </div>
-            )}
-          </div>
         </section>
       </div>
 
-      <PromptGuide
-        open={guideVisible}
-        pinned={guidePinned}
-        compact={busy && guidePinned}
-        mode={guideMode}
-        duration={durationSeconds}
-        prompt={prompt}
-        textareaRef={textareaRef}
-        monitorRef={monitorRef}
-        onPinnedChange={(next) => {
-          setGuidePinned(next)
-          if (next) setGuideOpen(true)
-          else if (document.activeElement !== textareaRef.current) {
+      <ComposeDialog
+        open={composeOpen}
+        title={composeTitle}
+        hint={composeHint}
+        generateDisabled={generateDisabled}
+        generateLabel={generateLabel}
+        submitting={submitting}
+        onOpenChange={(open) => {
+          setComposeOpen(open)
+          if (!open) {
             setGuideOpen(false)
+            setGuidePinned(false)
           }
         }}
-        onClose={() => setGuideOpen(false)}
-        onApply={(next, selection) => {
-          setPrompt(next)
-          setGuideOpen(true)
-          requestAnimationFrame(() => {
-            const el = textareaRef.current
-            if (!el) return
-            el.focus()
-            el.setSelectionRange(selection.start, selection.end)
-          })
-        }}
-      />
+        onGenerate={() => void submit(false)}
+        guide={
+          <PromptGuide
+            docked
+            open={composeOpen && (guideOpen || guidePinned)}
+            pinned={guidePinned}
+            mode={guideMode}
+            duration={durationSeconds}
+            prompt={prompt}
+            textareaRef={textareaRef}
+            disabled={composeReadOnly}
+            onPinnedChange={(next) => {
+              setGuidePinned(next)
+              if (next) setGuideOpen(true)
+              else if (document.activeElement !== textareaRef.current) {
+                setGuideOpen(false)
+              }
+            }}
+            onClose={() => setGuideOpen(false)}
+            onApply={(next, selection) => {
+              setPrompt(next)
+              setGuideOpen(true)
+              requestAnimationFrame(() => {
+                const el = textareaRef.current
+                if (!el) return
+                el.focus()
+                el.setSelectionRange(selection.start, selection.end)
+              })
+            }}
+          />
+        }
+      >
+        <ComposeForm
+          readOnly={composeReadOnly}
+          workflows={workflows}
+          workflowName={workflowName}
+          grouped={grouped}
+          currentWorkflow={currentWorkflow}
+          mappingHints={mappingHints}
+          prompt={prompt}
+          promptHint={promptHint}
+          textareaRef={textareaRef}
+          duration={duration}
+          aspect={aspect}
+          seed={seed}
+          randomize={randomize}
+          steps={steps}
+          cfg={cfg}
+          loras={loras}
+          loraFiles={loraFiles}
+          hasSteps={hasSteps}
+          hasCfg={hasCfg}
+          mediaSlots={mediaSlots}
+          slotFiles={slotFiles}
+          dynamicRefs={dynamicRefs}
+          refDrafts={refDrafts}
+          onWorkflowChange={(name) => {
+            setWorkflowName(name)
+            void loadBundle(name)
+          }}
+          onPromptChange={setPrompt}
+          onPromptFocus={() => setGuideOpen(true)}
+          onDurationChange={setDuration}
+          onAspectChange={setAspect}
+          onSeedChange={setSeed}
+          onRandomizeChange={setRandomize}
+          onStepsChange={setSteps}
+          onCfgChange={setCfg}
+          onLorasChange={setLoras}
+          onSlotFile={setSlotFile}
+          onAddRefs={addRefFiles}
+          onRemoveRef={removeRefDraft}
+        />
+      </ComposeDialog>
 
       <SettingsDialog
         open={settingsOpen}
@@ -1175,6 +892,36 @@ export function StudioApp() {
               }}
             >
               仍然提交
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
+
+      <AlertDialog
+        open={Boolean(deleteTarget)}
+        onOpenChange={(open) => {
+          if (!open) setDeleteTarget(null)
+        }}
+      >
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>删除这条任务？</AlertDialogTitle>
+            <AlertDialogDescription>
+              会从任务列表拿掉，并删除 outputs 里对应的成片。此操作不能恢复。
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel>取消</AlertDialogCancel>
+            <AlertDialogAction
+              variant="destructive"
+              onClick={() => {
+                if (!deleteTarget) return
+                const job = deleteTarget
+                setDeleteTarget(null)
+                void deleteJob(job)
+              }}
+            >
+              删除
             </AlertDialogAction>
           </AlertDialogFooter>
         </AlertDialogContent>

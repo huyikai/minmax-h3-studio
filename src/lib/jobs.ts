@@ -1,7 +1,7 @@
 import fs from "node:fs/promises"
 import path from "node:path"
 import type { Job, PublicJob } from "@/lib/types"
-import { dataDir, jobsPath } from "@/lib/paths"
+import { dataDir, jobOutputDir, jobsPath } from "@/lib/paths"
 
 async function ensure() {
   await fs.mkdir(dataDir(), { recursive: true })
@@ -43,6 +43,19 @@ export async function upsertJob(job: Job) {
 export async function listJobs() {
   const jobs = await readJobs()
   return jobs.sort((a, b) => (a.createdAt < b.createdAt ? 1 : -1))
+}
+
+export function isActiveStatus(status: Job["status"]) {
+  return status === "queued" || status === "running"
+}
+
+export async function removeJob(id: string) {
+  const jobs = await readJobs()
+  const next = jobs.filter((job) => job.id !== id)
+  if (next.length === jobs.length) return false
+  await writeJobs(next)
+  await fs.rm(jobOutputDir(id), { recursive: true, force: true })
+  return true
 }
 
 export function activeJob(jobs: Job[]) {

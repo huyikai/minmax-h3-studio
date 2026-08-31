@@ -1,4 +1,4 @@
-import { getJob, toPublicJob, upsertJob } from "@/lib/jobs"
+import { getJob, isActiveStatus, removeJob, toPublicJob, upsertJob } from "@/lib/jobs"
 import { ensureJobWatch } from "@/lib/runner"
 import { interrupt } from "@/lib/comfy"
 
@@ -12,7 +12,7 @@ export async function GET(
   const { id } = await context.params
   const job = await getJob(id)
   if (!job) return Response.json({ error: "任务不存在" }, { status: 404 })
-  if (job.status === "queued" || job.status === "running") {
+  if (isActiveStatus(job.status)) {
     ensureJobWatch(job.id)
   }
   return Response.json({ job: toPublicJob(job) })
@@ -25,7 +25,7 @@ export async function DELETE(
   const { id } = await context.params
   const job = await getJob(id)
   if (!job) return Response.json({ error: "任务不存在" }, { status: 404 })
-  if (job.status === "queued" || job.status === "running") {
+  if (isActiveStatus(job.status)) {
     try {
       await interrupt()
     } catch {
@@ -38,5 +38,7 @@ export async function DELETE(
     })
     return Response.json({ job: toPublicJob(next) })
   }
-  return Response.json({ job: toPublicJob(job) })
+  const deleted = await removeJob(id)
+  if (!deleted) return Response.json({ error: "任务不存在" }, { status: 404 })
+  return Response.json({ deleted: true })
 }
