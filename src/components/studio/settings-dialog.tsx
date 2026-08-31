@@ -21,7 +21,6 @@ import {
   Field,
   FieldDescription,
   FieldGroup,
-  FieldLabel,
 } from "@/components/ui/field"
 import { Input } from "@/components/ui/input"
 import {
@@ -33,6 +32,7 @@ import {
   SelectValue,
 } from "@/components/ui/select"
 import { ScrollArea } from "@/components/ui/scroll-area"
+import { LabelWithHelp } from "@/components/studio/field-help"
 import { cn } from "@/lib/utils"
 import type {
   FieldMapping,
@@ -40,6 +40,7 @@ import type {
   WorkflowMapping,
 } from "@/lib/types"
 import type { WorkflowBundle } from "@/components/studio/types"
+import type { WorkflowListItem } from "@/lib/default-workflows"
 
 type SettingsDialogProps = {
   open: boolean
@@ -48,7 +49,7 @@ type SettingsDialogProps = {
   comfyUrl: string
   connected: boolean
   workflowName: string
-  workflows: string[]
+  workflows: WorkflowListItem[]
   bundle: WorkflowBundle | null
   onPortChange: (port: number) => Promise<void>
   onImported: (name: string) => Promise<void>
@@ -59,18 +60,20 @@ type SettingsDialogProps = {
 const ROLES: Array<{
   key: keyof Pick<
     WorkflowMapping,
-    "prompt" | "firstFrame" | "duration" | "width" | "height" | "seed" | "steps" | "cfg"
+    "prompt" | "firstFrame" | "lastFrame" | "duration" | "width" | "height" | "seed" | "steps" | "cfg"
   >
   label: string
+  help: string
 }> = [
-  { key: "prompt", label: "提示词" },
-  { key: "firstFrame", label: "首帧" },
-  { key: "duration", label: "时长" },
-  { key: "width", label: "宽度" },
-  { key: "height", label: "高度" },
-  { key: "seed", label: "Seed" },
-  { key: "steps", label: "步数" },
-  { key: "cfg", label: "CFG" },
+  { key: "prompt", label: "提示词", help: "主界面文本框会写入这个节点的对应输入。" },
+  { key: "firstFrame", label: "首帧", help: "上传的图会变成这个 LoadImage 节点的文件名。" },
+  { key: "lastFrame", label: "尾帧", help: "尾帧图片写入这个 LoadImage。" },
+  { key: "duration", label: "时长", help: "主界面选的秒数写到这里。单位看下面「时长单位」。" },
+  { key: "width", label: "宽度", help: "画幅预设会改这个宽度，单位是像素。" },
+  { key: "height", label: "高度", help: "画幅预设会改这个高度，单位是像素。" },
+  { key: "seed", label: "Seed", help: "随机种子写入这个节点。" },
+  { key: "steps", label: "步数", help: "采样步数写入这个节点。没有采样器就保持未映射。" },
+  { key: "cfg", label: "CFG", help: "提示词约束强度写入这个节点。没有 cfg 输入就保持未映射。" },
 ]
 
 function mappingValue(mapping?: FieldMapping) {
@@ -174,14 +177,16 @@ export function SettingsDialog({
         <DialogHeader>
           <DialogTitle>设置</DialogTitle>
           <DialogDescription>
-            Studio 只连本机 ComfyUI。工作流 JSON 放在仓库的 workflows/ 目录，或在这里上传。
+            Studio 只连本机 ComfyUI。自带官方 / Turbo 预设；也可以再上传自己的 API JSON。
           </DialogDescription>
         </DialogHeader>
 
         <div className="flex max-h-[70vh] flex-col gap-5 overflow-y-auto pr-1">
           <FieldGroup>
             <Field>
-              <FieldLabel htmlFor="comfy-port">ComfyUI 端口</FieldLabel>
+              <LabelWithHelp htmlFor="comfy-port" label="ComfyUI 端口">
+                Studio 只连本机。改端口后点保存，不会改 ComfyUI 自己的启动参数。
+              </LabelWithHelp>
               <div className="flex gap-2">
                 <Input
                   id="comfy-port"
@@ -218,9 +223,11 @@ export function SettingsDialog({
 
           <FieldGroup className="border-t pt-5">
             <Field>
-              <FieldLabel>工作流</FieldLabel>
+              <LabelWithHelp label="工作流">
+                必须是 ComfyUI「导出（API）」的 JSON。画布格式不能提交到 /prompt。官方预设不能删，上传同名文件可以覆盖。
+              </LabelWithHelp>
               <FieldDescription>
-                从 ComfyUI 菜单导出「API」格式 JSON。画布格式无法提交。
+                从 ComfyUI 菜单导出「API」格式。覆盖预设后，删除覆盖即可恢复。
               </FieldDescription>
               <input
                 ref={fileRef}
@@ -250,38 +257,52 @@ export function SettingsDialog({
             </Field>
             {workflows.length === 0 ? (
               <p className="text-sm text-muted-foreground">
-                还没有工作流。把 JSON 放到 workflows/ 或点上面的上传。
+                没有找到预设。检查 templates/workflows/，或点上面上传。
               </p>
             ) : (
               <ul className="flex flex-col gap-2">
-                {workflows.map((name) => (
+                {workflows.map((item) => (
                   <li
-                    key={name}
+                    key={item.name}
                     className="flex items-center justify-between gap-2 rounded-lg border px-3 py-2"
                   >
-                    <span className="flex min-w-0 items-center gap-2 truncate text-sm">
-                      <span className="truncate">{name}</span>
-                      {name === workflowName ? (
-                        <span className="shrink-0 font-mono text-[11px] text-primary">
-                          当前
-                        </span>
-                      ) : null}
+                    <span className="flex min-w-0 flex-col">
+                      <span className="flex min-w-0 items-center gap-2 truncate text-sm">
+                        <span className="truncate">{item.label}</span>
+                        {item.bundled ? (
+                          <span className="shrink-0 font-mono text-[11px] text-muted-foreground">
+                            {item.overridden ? "已覆盖" : "预设"}
+                          </span>
+                        ) : null}
+                        {item.name === workflowName ? (
+                          <span className="shrink-0 font-mono text-[11px] text-primary">
+                            当前
+                          </span>
+                        ) : null}
+                      </span>
+                      <span className="truncate font-mono text-[11px] text-muted-foreground">
+                        {item.name}
+                      </span>
                     </span>
-                    <Button
-                      type="button"
-                      size="icon-sm"
-                      variant="ghost"
-                      onClick={() => {
-                        void onDeleted(name).catch((error: unknown) => {
-                          toast.error(
-                            error instanceof Error ? error.message : "删除失败"
-                          )
-                        })
-                      }}
-                    >
-                      <Trash2Icon />
-                      <span className="sr-only">删除 {name}</span>
-                    </Button>
+                    {item.bundled && !item.overridden ? null : (
+                      <Button
+                        type="button"
+                        size="icon-sm"
+                        variant="ghost"
+                        onClick={() => {
+                          void onDeleted(item.name).catch((error: unknown) => {
+                            toast.error(
+                              error instanceof Error ? error.message : "删除失败"
+                            )
+                          })
+                        }}
+                      >
+                        <Trash2Icon />
+                        <span className="sr-only">
+                          {item.overridden ? `恢复 ${item.label}` : `删除 ${item.label}`}
+                        </span>
+                      </Button>
+                    )}
                   </li>
                 ))}
               </ul>
@@ -290,7 +311,9 @@ export function SettingsDialog({
 
           <FieldGroup className="border-t pt-5">
             <Field>
-              <FieldLabel>字段映射</FieldLabel>
+              <LabelWithHelp label="字段映射">
+                按节点类型自动识别。认错时在下面改，只对当前这份 JSON 生效。
+              </LabelWithHelp>
               <FieldDescription>
                 默认按节点类型自动识别。认错时在这里改，只对当前这份 JSON 生效。
               </FieldDescription>
@@ -303,7 +326,7 @@ export function SettingsDialog({
                   <div className="flex flex-col gap-3 p-3">
                     {ROLES.map((role) => (
                       <Field key={role.key}>
-                        <FieldLabel>{role.label}</FieldLabel>
+                        <LabelWithHelp label={role.label}>{role.help}</LabelWithHelp>
                         <Select
                           value={mappingValue(bundle.mapping[role.key])}
                           onValueChange={(value) => {
@@ -334,7 +357,9 @@ export function SettingsDialog({
                       </Field>
                     ))}
                     <Field>
-                      <FieldLabel>时长单位</FieldLabel>
+                      <LabelWithHelp label="时长单位">
+                        秒：直接写主界面的秒数。帧数：按 H3 的 length 换算（大约 24fps 并对齐到合法帧数）。
+                      </LabelWithHelp>
                       <Select
                         value={bundle.mapping.durationUnit ?? "seconds"}
                         onValueChange={(value) => {

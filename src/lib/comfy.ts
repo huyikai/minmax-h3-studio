@@ -90,6 +90,17 @@ export async function uploadImage(file: {
   bytes: Buffer
   contentType: string
 }) {
+  return uploadInputFile(file, "上传失败")
+}
+
+export async function uploadInputFile(
+  file: {
+    filename: string
+    bytes: Buffer
+    contentType: string
+  },
+  errorLabel = "上传失败"
+) {
   const { http } = await comfyBaseUrl()
   const form = new FormData()
   const bytes = new Uint8Array(file.bytes)
@@ -105,7 +116,7 @@ export async function uploadImage(file: {
     body: form,
   })
   if (!response.ok) {
-    throw new Error(`上传首帧失败（${response.status}）`)
+    throw new Error(`${errorLabel}（${response.status}）`)
   }
   const json = (await response.json()) as {
     name: string

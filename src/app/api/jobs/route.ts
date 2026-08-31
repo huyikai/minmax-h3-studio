@@ -3,8 +3,8 @@ import { ASPECT_PRESETS } from "@/lib/types"
 import type { Job, LoraFormValue } from "@/lib/types"
 import { getActiveJob, listJobs, toPublicJob, upsertJob } from "@/lib/jobs"
 import { readSettings, writeSettings } from "@/lib/settings"
-import { getHealth, newClientId, submitPrompt, uploadImage } from "@/lib/comfy"
-import { applyPatch, parseApiWorkflow } from "@/lib/workflow-core"
+import { getHealth, newClientId, submitPrompt, uploadInputFile } from "@/lib/comfy"
+import { applyPatch, parseApiWorkflow, type MediaPatch } from "@/lib/workflow-core"
 import { readWorkflowBundle, readWorkflowFile } from "@/lib/workflow-service"
 import { ensureJobWatch, writeSubmittedWorkflow } from "@/lib/runner"
 
@@ -31,7 +31,6 @@ export async function POST(request: Request) {
   const stepsRaw = form.get("steps")
   const cfgRaw = form.get("cfg")
   const loras = parseLoras(String(form.get("loras") ?? "[]"))
-  const firstFrame = form.get("firstFrame")
 
   if (!workflowFile) {
     return Response.json({ error: "请先选择一份工作流" }, { status: 400 })
@@ -73,34 +72,29 @@ export async function POST(request: Request) {
     )
   }
 
-  if (firstFrame instanceof File && firstFrame.size > 0) {
-    const bundle = await readWorkflowBundle(workflowFile)
-    if (!bundle.mapping.firstFrame) {
-      return Response.json(
-        {
-          error:
-            "当前工作流没有可写入的首帧节点。请换一份带 LoadImage 的 I2V 图，或在设置里手动映射。",
-        },
-        { status: 400 }
-      )
-    }
-  }
-
   const settings = await readSettings()
   const bundle = await readWorkflowBundle(workflowFile)
   const { data } = await readWorkflowFile(workflowFile)
   const workflow = parseApiWorkflow(data)
 
-  let firstFrameFilename: string | undefined
+  const media: MediaPatch[] = []
+  const mediaNames: string[] = []
   let firstFrameName: string | undefined
-  if (firstFrame instanceof File && firstFrame.size > 0) {
-    const bytes = Buffer.from(await firstFrame.arrayBuffer())
-    firstFrameName = firstFrame.name
-    firstFrameFilename = await uploadImage({
-      filename: firstFrame.name || "first-frame.png",
+  let lastFrameName: string | undefined
+
+  for (const slot of bundle.mapping.media ?? []) {
+    const raw = form.get(`media:${slot.id}`)
+    if (!(raw instanceof File) || raw.size <= 0) continue
+    const bytes = Buffer.from(await raw.arrayBuffer())
+    const filename = await uploadInputFile({
+      filename: raw.name || `${slot.id}.bin`,
       bytes,
-      contentType: firstFrame.type || "image/png",
-    })
+      contentType: raw.type || "application/octet-stream",
+    }, `上传${slot.label}失败`)
+    media.push({ slotId: slot.id, filename })
+    mediaNames.push(raw.name)
+    if (slot.role === "firstFrame") firstFrameName = raw.name
+    if (slot.role === "lastFrame") lastFrameName = raw.name
   }
 
   const patched = applyPatch(workflow, bundle.mapping, {
@@ -109,7 +103,7 @@ export async function POST(request: Request) {
     width: preset.width,
     height: preset.height,
     seed: Number.isFinite(seed) ? seed : Math.floor(Math.random() * 1_000_000_000),
-    firstFrameFilename,
+    media,
     loras,
     steps: stepsRaw ? Number(stepsRaw) : bundle.values.steps,
     cfg: cfgRaw ? Number(cfgRaw) : bundle.values.cfg,
@@ -132,6 +126,8 @@ export async function POST(request: Request) {
     height: preset.height,
     seed: Number.isFinite(seed) ? seed : 0,
     firstFrameName,
+    lastFrameName,
+    mediaNames: mediaNames.length ? mediaNames : undefined,
     loras,
     steps: stepsRaw ? Number(stepsRaw) : bundle.values.steps,
     cfg: cfgRaw ? Number(cfgRaw) : bundle.values.cfg,

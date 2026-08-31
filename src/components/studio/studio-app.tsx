@@ -6,12 +6,10 @@ import {
   ClapperboardIcon,
   DownloadIcon,
   ExternalLinkIcon,
-  ImagePlusIcon,
   PlayIcon,
   RefreshCwIcon,
   Settings2Icon,
   SquareIcon,
-  XIcon,
 } from "lucide-react"
 import { Button } from "@/components/ui/button"
 import { Textarea } from "@/components/ui/textarea"
@@ -33,22 +31,17 @@ import {
   Field,
   FieldDescription,
   FieldGroup,
-  FieldLabel,
 } from "@/components/ui/field"
 import {
   Select,
   SelectContent,
   SelectGroup,
   SelectItem,
+  SelectLabel,
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select"
 import { ToggleGroup, ToggleGroupItem } from "@/components/ui/toggle-group"
-import {
-  Collapsible,
-  CollapsibleContent,
-  CollapsibleTrigger,
-} from "@/components/ui/collapsible"
 import {
   AlertDialog,
   AlertDialogAction,
@@ -59,20 +52,74 @@ import {
   AlertDialogHeader,
   AlertDialogTitle,
 } from "@/components/ui/alert-dialog"
+import { LabelWithHelp } from "@/components/studio/field-help"
+import { MediaSlots, type SlotFile } from "@/components/studio/media-slots"
 import { SettingsDialog } from "@/components/studio/settings-dialog"
 import type { WorkflowBundle } from "@/components/studio/types"
 import type { HealthStatus, LoraFormValue, PublicJob } from "@/lib/types"
 import { ASPECT_PRESETS, DURATION_OPTIONS } from "@/lib/types"
+import type { WorkflowListItem } from "@/lib/default-workflows"
 import { cn } from "@/lib/utils"
 
-const PROMPT_PLACEHOLDER = `先写场景与人物，再按时间写出镜头运动。把对白、环境音和配乐写在同一段里。
+const PROMPT_CHAR_SOFT_LIMIT = 1000
+
+const T2V_PLACEHOLDER = `先写场景与人物，再按时间写出镜头运动。对白和环境音写在同一段里。不要写 BGM/配乐，会烧进片子。
 
 例如：
 黄昏的海边栈道，一位穿红色风衣的女人面向镜头。
 [0s-3s] 中景，海风吹动头发，镜头缓慢前推。
 [3s-6s] 切到侧脸特写，她开口说话。
 对白：「回来了。」
-环境音：浪声、远处海鸥。配乐低而温暖。`
+环境音：浪声、远处海鸥。`
+
+const I2V_PLACEHOLDER = `从这张首帧开始写运动，不要复述已经能看见的静帧细节。锁住身份、服装、场景。
+
+例如：
+从首帧开始，女人慢慢站起，走向镜头，停住后侧头看向窗外的雨。
+[0s-3s] 中景，手持微推。
+[3s-5s] 停在半身，头发被风吹起。
+保持同一张脸、红风衣、窗边座位和暖色灯光。
+对白：「回来了。」
+环境音：雨声、远处车流。`
+
+const FLF_PLACEHOLDER = `首帧是起点，尾帧是终点。写中间怎么过渡，不要复述两张静帧里已经能看见的细节。
+
+例如：
+从首帧的站姿走到尾帧的坐姿。锁住同一张脸、红风衣和窗边座位。
+[0s-3s] 中景，手持微推，她转身走向椅子。
+[3s-5s] 坐下，看向窗外的雨。
+对白：「回来了。」
+环境音：雨声、远处车流。`
+
+const R2V_PLACEHOLDER = `按连接顺序用标签引用参考，并给每个参考分配任务。不要把两张参考混成一个人。
+
+例如：
+人物身份和服装以 <Picture 1> 为准。动作、节奏和机位以 <Video 1> 为准。
+镜头：固定中景，不要推拉。
+[0s-3s] 先看镜头，再按 <Video 1> 的节奏做同一个动作。
+对白：「回来了。」
+环境音：室内底噪。`
+
+function promptCoachHint(input: {
+  hasFirstFrame: boolean
+  hasLastFrame: boolean
+  hasRefs: boolean
+  durationSeconds: number
+}) {
+  if (input.hasRefs) {
+    return "用 <Picture 1>、<Video 1> 引用参考，并写清每个参考负责身份、服装还是动作。"
+  }
+  if (input.hasLastFrame) {
+    return "写从首帧过渡到尾帧的运动，不要复述两张静帧里已经能看见的细节。"
+  }
+  if (input.hasFirstFrame) {
+    return "有首帧时写画面怎么动，不要复述已经能看见的静帧。"
+  }
+  if (input.durationSeconds >= 13) {
+    return "13-15 秒要有一条清楚的动作推进，不要堆互不相关的场面。"
+  }
+  return "微调时锁住身份和场景，只改动作。"
+}
 
 function randomSeed() {
   return Math.floor(Math.random() * 1_000_000_000)
@@ -108,11 +155,20 @@ function MetaBits({ items }: { items: string[] }) {
   )
 }
 
+function groupWorkflows(items: WorkflowListItem[]) {
+  return {
+    official: items.filter((item) => item.family === "official"),
+    turbo: items.filter((item) => item.family === "turbo"),
+    reference: items.filter((item) => item.family === "reference"),
+    custom: items.filter((item) => item.family === "custom"),
+  }
+}
+
 export function StudioApp() {
   const [health, setHealth] = useState<HealthStatus | null>(null)
   const [port, setPort] = useState(8188)
   const [comfyUrl, setComfyUrl] = useState("http://127.0.0.1:8188")
-  const [workflows, setWorkflows] = useState<string[]>([])
+  const [workflows, setWorkflows] = useState<WorkflowListItem[]>([])
   const [workflowName, setWorkflowName] = useState("")
   const [bundle, setBundle] = useState<WorkflowBundle | null>(null)
   const [jobs, setJobs] = useState<PublicJob[]>([])
@@ -130,9 +186,7 @@ export function StudioApp() {
   const [cfg, setCfg] = useState("")
   const [loras, setLoras] = useState<LoraFormValue[]>([])
   const [loraFiles, setLoraFiles] = useState<string[]>([])
-  const [firstFrame, setFirstFrame] = useState<File | null>(null)
-  const [firstPreview, setFirstPreview] = useState<string | null>(null)
-  const frameInputRef = useRef<HTMLInputElement>(null)
+  const [slotFiles, setSlotFiles] = useState<Record<string, SlotFile>>({})
   const eventSourceRef = useRef<EventSource | null>(null)
 
   const connected = Boolean(health?.ok)
@@ -160,16 +214,30 @@ export function StudioApp() {
 
   const loadWorkflows = useCallback(async (preferred?: string | null, keep?: string) => {
     const response = await fetch("/api/workflows")
-    const json = (await response.json()) as { files: string[] }
-    setWorkflows(json.files)
+    const json = (await response.json()) as {
+      files?: string[]
+      workflows?: WorkflowListItem[]
+    }
+    const list =
+      json.workflows ??
+      (json.files ?? []).map((name) => ({
+        name,
+        label: name,
+        description: "",
+        family: "custom" as const,
+        bundled: false,
+        overridden: false,
+      }))
+    setWorkflows(list)
+    const names = list.map((item) => item.name)
     const next =
-      keep && json.files.includes(keep)
+      keep && names.includes(keep)
         ? keep
-        : preferred && json.files.includes(preferred)
+        : preferred && names.includes(preferred)
           ? preferred
-          : (json.files[0] ?? "")
+          : (names[0] ?? "")
     setWorkflowName(next)
-    return { files: json.files, selected: next }
+    return { files: names, selected: next }
   }, [])
 
   const applyBundle = useCallback((next: WorkflowBundle) => {
@@ -181,6 +249,12 @@ export function StudioApp() {
     setSteps(next.values.steps !== undefined ? String(next.values.steps) : "")
     setCfg(next.values.cfg !== undefined ? String(next.values.cfg) : "")
     setLoras(next.values.loras)
+    setSlotFiles((previous) => {
+      for (const item of Object.values(previous)) {
+        URL.revokeObjectURL(item.preview)
+      }
+      return {}
+    })
   }, [])
 
   const loadBundle = useCallback(
@@ -261,12 +335,17 @@ export function StudioApp() {
     }
   }, [loadBundle, loadHealth, loadJobs, loadSettings, loadWorkflows])
 
-  function setFrameFile(file: File | null) {
-    setFirstPreview((previous) => {
-      if (previous) URL.revokeObjectURL(previous)
-      return file ? URL.createObjectURL(file) : null
+  function setSlotFile(slotId: string, file: File | null) {
+    setSlotFiles((previous) => {
+      const next = { ...previous }
+      if (next[slotId]) URL.revokeObjectURL(next[slotId].preview)
+      if (!file) {
+        delete next[slotId]
+        return next
+      }
+      next[slotId] = { file, preview: URL.createObjectURL(file) }
+      return next
     })
-    setFirstFrame(file)
   }
 
   const progressPercent = useMemo(() => {
@@ -296,9 +375,11 @@ export function StudioApp() {
       form.set("seed", String(randomize ? randomSeed() : seed))
       form.set("loras", JSON.stringify(loras))
       form.set("ignoreBusy", ignoreBusy ? "true" : "false")
-      if (steps) form.set("steps", steps)
-      if (cfg) form.set("cfg", cfg)
-      if (firstFrame) form.set("firstFrame", firstFrame)
+      if (steps && bundle?.mapping.steps) form.set("steps", steps)
+      if (cfg && bundle?.mapping.cfg) form.set("cfg", cfg)
+      for (const [slotId, item] of Object.entries(slotFiles)) {
+        form.set(`media:${slotId}`, item.file)
+      }
       if (randomize) setSeed(Number(form.get("seed")))
 
       const response = await fetch("/api/jobs", { method: "POST", body: form })
@@ -344,11 +425,52 @@ export function StudioApp() {
     ? [
         bundle.mapping.prompt ? "提示词" : null,
         bundle.mapping.firstFrame ? "首帧" : null,
+        bundle.mapping.lastFrame ? "尾帧" : null,
+        bundle.mapping.media?.some((slot) => slot.role === "refImage")
+          ? "参考图"
+          : null,
+        bundle.mapping.media?.some((slot) => slot.role === "refVideo")
+          ? "参考视频"
+          : null,
         bundle.mapping.duration ? "时长" : null,
         bundle.mapping.seed ? "seed" : null,
         bundle.mapping.loras.length ? `LoRA ×${bundle.mapping.loras.length}` : null,
       ].filter(Boolean)
     : []
+
+  const durationSeconds = Number(duration) || 0
+  const mediaSlots = bundle?.mapping.media ?? []
+  const hasFirstFrameMapping = Boolean(
+    mediaSlots.some((slot) => slot.role === "firstFrame")
+  )
+  const hasLastFrameMapping = Boolean(
+    mediaSlots.some((slot) => slot.role === "lastFrame")
+  )
+  const hasRefs = mediaSlots.some(
+    (slot) =>
+      slot.role === "refImage" ||
+      slot.role === "refVideo" ||
+      slot.role === "refAudio"
+  )
+  const usingFirstFrame = Boolean(slotFiles.firstFrame && hasFirstFrameMapping)
+  const promptHint = promptCoachHint({
+    hasFirstFrame: usingFirstFrame,
+    hasLastFrame: Boolean(slotFiles.lastFrame && hasLastFrameMapping),
+    hasRefs,
+    durationSeconds,
+  })
+  const promptPlaceholder = hasRefs
+    ? R2V_PLACEHOLDER
+    : hasLastFrameMapping
+      ? FLF_PLACEHOLDER
+      : usingFirstFrame
+        ? I2V_PLACEHOLDER
+        : T2V_PLACEHOLDER
+  const promptOverLimit = prompt.length > PROMPT_CHAR_SOFT_LIMIT
+  const hasSteps = Boolean(bundle?.mapping.steps)
+  const hasCfg = Boolean(bundle?.mapping.cfg)
+  const grouped = groupWorkflows(workflows)
+  const currentWorkflow = workflows.find((item) => item.name === workflowName)
 
   const generateBar = (
     <div className="flex gap-2">
@@ -451,10 +573,9 @@ export function StudioApp() {
                   <EmptyMedia variant="icon">
                     <ClapperboardIcon />
                   </EmptyMedia>
-                  <EmptyTitle>先导入一份 API 工作流</EmptyTitle>
+                  <EmptyTitle>没有可用的工作流</EmptyTitle>
                   <EmptyDescription>
-                    在 ComfyUI 打开你已经跑通的 MiniMax H3 图，使用「文件 →
-                    导出（API）」，把 JSON 放到 workflows/ 或在设置里上传。
+                    仓库自带官方和 Turbo 预设。若这里是空的，检查 templates/workflows/，或在设置里上传自己的 API JSON。
                   </EmptyDescription>
                 </EmptyHeader>
                 <EmptyContent>
@@ -466,7 +587,9 @@ export function StudioApp() {
             ) : (
               <FieldGroup>
                 <Field>
-                  <FieldLabel>工作流</FieldLabel>
+                  <LabelWithHelp label="工作流">
+                    官方 20 步、Turbo 6 步，或参考生（另一套 Ref2VA 权重）。上传区随当前图上的节点出现。
+                  </LabelWithHelp>
                   <Select
                     value={workflowName}
                     onValueChange={(name) => {
@@ -475,110 +598,101 @@ export function StudioApp() {
                     }}
                   >
                     <SelectTrigger className="w-full">
-                      <SelectValue placeholder="选择 JSON" />
+                      <SelectValue placeholder="选择工作流" />
                     </SelectTrigger>
                     <SelectContent>
-                      <SelectGroup>
-                        {workflows.map((name) => (
-                          <SelectItem key={name} value={name}>
-                            {name}
-                          </SelectItem>
-                        ))}
-                      </SelectGroup>
+                      {grouped.official.length > 0 ? (
+                        <SelectGroup>
+                          <SelectLabel>官方</SelectLabel>
+                          {grouped.official.map((item) => (
+                            <SelectItem key={item.name} value={item.name}>
+                              {item.label}
+                            </SelectItem>
+                          ))}
+                        </SelectGroup>
+                      ) : null}
+                      {grouped.turbo.length > 0 ? (
+                        <SelectGroup>
+                          <SelectLabel>Turbo LoRA</SelectLabel>
+                          {grouped.turbo.map((item) => (
+                            <SelectItem key={item.name} value={item.name}>
+                              {item.label}
+                            </SelectItem>
+                          ))}
+                        </SelectGroup>
+                      ) : null}
+                      {grouped.reference.length > 0 ? (
+                        <SelectGroup>
+                          <SelectLabel>参考生</SelectLabel>
+                          {grouped.reference.map((item) => (
+                            <SelectItem key={item.name} value={item.name}>
+                              {item.label}
+                            </SelectItem>
+                          ))}
+                        </SelectGroup>
+                      ) : null}
+                      {grouped.custom.length > 0 ? (
+                        <SelectGroup>
+                          <SelectLabel>我的</SelectLabel>
+                          {grouped.custom.map((item) => (
+                            <SelectItem key={item.name} value={item.name}>
+                              {item.label}
+                            </SelectItem>
+                          ))}
+                        </SelectGroup>
+                      ) : null}
                     </SelectContent>
                   </Select>
                   <FieldDescription>
-                    {mappingHints.length
-                      ? `已识别：${mappingHints.join("、")}`
-                      : "未识别到常用字段，请到设置里手动映射"}
+                    {[
+                      currentWorkflow?.description,
+                      mappingHints.length
+                        ? `已识别：${mappingHints.join("、")}`
+                        : "未识别到常用字段，请到设置里手动映射",
+                    ]
+                      .filter(Boolean)
+                      .join(" ")}
                   </FieldDescription>
                 </Field>
 
                 <Field>
-                  <FieldLabel htmlFor="prompt">提示词</FieldLabel>
+                  <div className="flex items-baseline justify-between gap-3">
+                    <LabelWithHelp htmlFor="prompt" label="提示词">
+                      写给 H3 的画面、镜头和对白。对白用原文；不要写配乐，会烧进片子。
+                    </LabelWithHelp>
+                    <span
+                      className={cn(
+                        "font-mono text-[11px] tabular-nums",
+                        promptOverLimit
+                          ? "text-primary"
+                          : "text-muted-foreground"
+                      )}
+                      aria-label={`字数 ${prompt.length}，建议不超过 ${PROMPT_CHAR_SOFT_LIMIT}`}
+                    >
+                      {prompt.length} / {PROMPT_CHAR_SOFT_LIMIT}
+                    </span>
+                  </div>
                   <Textarea
                     id="prompt"
                     value={prompt}
                     onChange={(event) => setPrompt(event.target.value)}
-                    placeholder={PROMPT_PLACEHOLDER}
+                    placeholder={promptPlaceholder}
+                    aria-describedby="prompt-hint"
                     className="min-h-44"
                   />
+                  <FieldDescription id="prompt-hint">{promptHint}</FieldDescription>
                 </Field>
 
-                <Field>
-                  <FieldLabel>首帧（可选）</FieldLabel>
-                  <div
-                    className={cn(
-                      "flex min-h-28 flex-col items-center justify-center gap-2 rounded-md border border-dashed border-border/80 bg-monitor/40 p-3 text-center",
-                      firstPreview && "items-stretch"
-                    )}
-                    onDragOver={(event) => event.preventDefault()}
-                    onDrop={(event) => {
-                      event.preventDefault()
-                      const file = event.dataTransfer.files[0]
-                      if (file?.type.startsWith("image/")) setFrameFile(file)
-                    }}
-                    onPaste={(event) => {
-                      const file = [...event.clipboardData.files][0]
-                      if (file?.type.startsWith("image/")) setFrameFile(file)
-                    }}
-                  >
-                    {firstPreview ? (
-                      <div className="relative">
-                        {/* eslint-disable-next-line @next/next/no-img-element */}
-                        <img
-                          src={firstPreview}
-                          alt="首帧预览"
-                          className="max-h-44 w-full rounded-md object-contain"
-                        />
-                        <Button
-                          type="button"
-                          size="icon-sm"
-                          variant="secondary"
-                          className="absolute top-2 right-2"
-                          onClick={() => setFrameFile(null)}
-                        >
-                          <XIcon />
-                          <span className="sr-only">移除首帧</span>
-                        </Button>
-                      </div>
-                    ) : (
-                      <>
-                        <ImagePlusIcon />
-                        <p className="max-w-[32ch] text-sm leading-relaxed text-muted-foreground text-pretty">
-                          拖入、粘贴或选择一张图。不放图则按文生视频提交。
-                        </p>
-                        <Button
-                          type="button"
-                          variant="outline"
-                          size="sm"
-                          onClick={() => frameInputRef.current?.click()}
-                        >
-                          选择图片
-                        </Button>
-                      </>
-                    )}
-                    <input
-                      ref={frameInputRef}
-                      type="file"
-                      accept="image/*"
-                      className="hidden"
-                      onChange={(event) => {
-                        const file = event.target.files?.[0]
-                        event.target.value = ""
-                        if (file) setFrameFile(file)
-                      }}
-                    />
-                  </div>
-                  {firstFrame && !bundle?.mapping.firstFrame ? (
-                    <FieldDescription>
-                      当前工作流没有首帧映射，生成时会报错。请换 I2V 图或到设置里指定 LoadImage。
-                    </FieldDescription>
-                  ) : null}
-                </Field>
+                <MediaSlots
+                  slots={mediaSlots}
+                  files={slotFiles}
+                  onChange={setSlotFile}
+                />
 
                 <Field>
-                  <FieldLabel>时长</FieldLabel>
+                  <LabelWithHelp label="时长">
+                    成片大约几秒，会写入工作流的时长或帧数。13-15 秒要有一条清楚的动作推进。
+                  </LabelWithHelp>
                   <ToggleGroup
                     type="single"
                     value={duration}
@@ -602,7 +716,9 @@ export function StudioApp() {
                 </Field>
 
                 <Field>
-                  <FieldLabel>画幅</FieldLabel>
+                  <LabelWithHelp label="画幅">
+                    画面比例，对应工作流里的宽和高。选了会覆盖 JSON 里原来的分辨率。
+                  </LabelWithHelp>
                   <ToggleGroup
                     type="single"
                     value={aspect}
@@ -626,7 +742,9 @@ export function StudioApp() {
                 </Field>
 
                 <Field>
-                  <FieldLabel htmlFor="seed">Seed</FieldLabel>
+                  <LabelWithHelp htmlFor="seed" label="Seed">
+                    随机种子。相同提示词和 seed 更容易复现；打开「随机」则每次换一个。
+                  </LabelWithHelp>
                   <div className="flex items-center gap-2">
                     <Input
                       id="seed"
@@ -647,11 +765,53 @@ export function StudioApp() {
                   </div>
                 </Field>
 
+                {hasSteps || hasCfg ? (
+                  <div
+                    className={cn(
+                      "grid gap-3",
+                      hasSteps && hasCfg ? "grid-cols-2" : "grid-cols-1"
+                    )}
+                  >
+                    {hasSteps ? (
+                      <Field>
+                        <LabelWithHelp htmlFor="steps" label="步数">
+                          采样步数。开了加速 LoRA 时偶尔要改，一般留空用工作流默认。
+                        </LabelWithHelp>
+                        <Input
+                          id="steps"
+                          className="font-mono tabular-nums"
+                          value={steps}
+                          onChange={(event) => setSteps(event.target.value)}
+                          placeholder="工作流默认"
+                        />
+                      </Field>
+                    ) : null}
+                    {hasCfg ? (
+                      <Field>
+                        <LabelWithHelp htmlFor="cfg" label="CFG">
+                          提示词约束强度。越大越听 prompt，太高容易发硬、不自然。常见默认约
+                          7。
+                        </LabelWithHelp>
+                        <Input
+                          id="cfg"
+                          className="font-mono tabular-nums"
+                          value={cfg}
+                          onChange={(event) => setCfg(event.target.value)}
+                          placeholder="工作流默认"
+                        />
+                      </Field>
+                    ) : null}
+                  </div>
+                ) : null}
+
                 {loras.length > 0 ? (
                   <FieldGroup>
                     {loras.map((lora, index) => (
                       <Field key={`${lora.nodeId}-${index}`}>
-                        <FieldLabel>LoRA {index + 1}</FieldLabel>
+                        <LabelWithHelp label={`LoRA ${index + 1}`}>
+                          工作流里检测到的 LoRA（含 MiniMax H3 Turbo LoRA）。可开关、换文件、调强度。关掉等于强度为
+                          0，不会从节点图里删掉。
+                        </LabelWithHelp>
                         <div className="flex items-center gap-2">
                           <Switch
                             checked={lora.enabled}
@@ -727,37 +887,6 @@ export function StudioApp() {
                   </FieldGroup>
                 ) : null}
 
-                <Collapsible>
-                  <CollapsibleTrigger asChild>
-                    <Button type="button" variant="ghost" size="sm">
-                      高级：步数 / CFG
-                    </Button>
-                  </CollapsibleTrigger>
-                  <CollapsibleContent>
-                    <div className="mt-3 grid grid-cols-2 gap-3">
-                      <Field>
-                        <FieldLabel htmlFor="steps">步数</FieldLabel>
-                        <Input
-                          id="steps"
-                          className="font-mono tabular-nums"
-                          value={steps}
-                          onChange={(event) => setSteps(event.target.value)}
-                          placeholder="工作流默认"
-                        />
-                      </Field>
-                      <Field>
-                        <FieldLabel htmlFor="cfg">CFG</FieldLabel>
-                        <Input
-                          id="cfg"
-                          className="font-mono tabular-nums"
-                          value={cfg}
-                          onChange={(event) => setCfg(event.target.value)}
-                          placeholder="工作流默认"
-                        />
-                      </Field>
-                    </div>
-                  </CollapsibleContent>
-                </Collapsible>
               </FieldGroup>
             )}
           </div>
@@ -949,8 +1078,12 @@ export function StudioApp() {
           const response = await fetch(`/api/workflows/${encodeURIComponent(name)}`, {
             method: "DELETE",
           })
-          const json = (await response.json()) as { error?: string }
+          const json = (await response.json()) as {
+            error?: string
+            restored?: boolean
+          }
           if (!response.ok) throw new Error(json.error ?? "删除失败")
+          if (json.restored) toast.success("已恢复官方预设")
           const { selected } = await loadWorkflows(null, workflowName === name ? undefined : workflowName)
           if (workflowName === name) {
             setWorkflowName(selected)

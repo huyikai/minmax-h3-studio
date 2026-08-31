@@ -45,8 +45,8 @@ export async function DELETE(
 ) {
   const { name } = await context.params
   try {
-    await removeWorkflow(decodeURIComponent(name))
-    return Response.json({ ok: true })
+    const result = await removeWorkflow(decodeURIComponent(name))
+    return Response.json({ ok: true, restored: result.restored })
   } catch (error) {
     return Response.json(
       { error: error instanceof Error ? error.message : "删除失败" },

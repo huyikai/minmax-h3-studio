@@ -5,6 +5,7 @@ import type {
   LoraFormValue,
   LoraMapping,
   MappingOverrides,
+  MediaSlot,
   WorkflowMapping,
 } from "@/lib/types"
 import { ASPECT_PRESETS } from "@/lib/types"
@@ -17,10 +18,14 @@ const H3_VIDEO_CLASSES = new Set([
 const LORA_CLASSES = new Set([
   "LoraLoader",
   "LoraLoaderModelOnly",
+  "MiniMaxH3TurboLoRA",
   "Power Lora Loader (rgthree)",
 ])
 
 const LOAD_IMAGE_CLASSES = new Set(["LoadImage", "LoadImageOutput"])
+const LOAD_VIDEO_CLASSES = new Set(["LoadVideo"])
+const LOAD_AUDIO_CLASSES = new Set(["LoadAudio", "VHS_LoadAudio"])
+const VIDEO_SPLIT_CLASSES = new Set(["GetVideoComponents"])
 
 const PROMPT_TEXT_CLASSES = new Set([
   "CLIPTextEncode",
@@ -116,8 +121,128 @@ function linkTarget(value: unknown): string | undefined {
   return undefined
 }
 
+function resolveLoader(
+  workflow: ApiWorkflow,
+  nodeId: string | undefined
+): { nodeId: string; input: string; kind: MediaSlot["kind"]; bridgeNodeId?: string } | undefined {
+  if (!nodeId || !workflow[nodeId]) return undefined
+  const node = workflow[nodeId]
+  if (LOAD_IMAGE_CLASSES.has(node.class_type)) {
+    return { nodeId, input: "image", kind: "image" }
+  }
+  if (LOAD_VIDEO_CLASSES.has(node.class_type)) {
+    return { nodeId, input: "file", kind: "video" }
+  }
+  if (LOAD_AUDIO_CLASSES.has(node.class_type)) {
+    return { nodeId, input: "audio", kind: "audio" }
+  }
+  if (VIDEO_SPLIT_CLASSES.has(node.class_type)) {
+    const videoSource = linkTarget(node.inputs.video)
+    const inner = resolveLoader(workflow, videoSource)
+    if (!inner) return undefined
+    return { ...inner, bridgeNodeId: nodeId }
+  }
+  return undefined
+}
+
+function detectMediaSlots(
+  workflow: ApiWorkflow,
+  h3Id: string,
+  node: ComfyNode
+): MediaSlot[] {
+  const slots: MediaSlot[] = []
+
+  const first = resolveLoader(workflow, linkTarget(node.inputs.first_frame))
+  if (first) {
+    slots.push({
+      id: "firstFrame",
+      kind: first.kind,
+      role: "firstFrame",
+      label: "首帧",
+      help: "从这张画面开始动。不放图会按文生提交。",
+      nodeId: first.nodeId,
+      input: first.input,
+      h3NodeId: h3Id,
+      h3Input: "first_frame",
+      bridgeNodeId: first.bridgeNodeId,
+    })
+  }
+
+  const last = resolveLoader(workflow, linkTarget(node.inputs.last_frame))
+  if (last) {
+    slots.push({
+      id: "lastFrame",
+      kind: last.kind,
+      role: "lastFrame",
+      label: "尾帧",
+      help: "成片停在这张画面。不放图就不锁尾帧。",
+      nodeId: last.nodeId,
+      input: last.input,
+      h3NodeId: h3Id,
+      h3Input: "last_frame",
+      bridgeNodeId: last.bridgeNodeId,
+    })
+  }
+
+  const refEntries = Object.entries(node.inputs).sort(([a], [b]) => a.localeCompare(b))
+  for (const [inputName, value] of refEntries) {
+    const imageMatch = inputName.match(/^ref_images\.ref_image_(\d+)$/)
+    const videoMatch = inputName.match(/^ref_videos\.ref_video_(\d+)$/)
+    const audioMatch = inputName.match(/^ref_audios\.ref_audio_(\d+)$/)
+    const index = Number((imageMatch ?? videoMatch ?? audioMatch)?.[1] ?? -1)
+    if (index < 0) continue
+    const loader = resolveLoader(workflow, linkTarget(value))
+    if (!loader) continue
+    if (imageMatch) {
+      const n = index + 1
+      slots.push({
+        id: `refImage:${index}`,
+        kind: loader.kind,
+        role: "refImage",
+        label: `参考图 ${n}`,
+        help: `提示词里用 <Picture ${n}> 指定这张图负责什么（身份、服装、风格）。`,
+        nodeId: loader.nodeId,
+        input: loader.input,
+        h3NodeId: h3Id,
+        h3Input: inputName,
+        bridgeNodeId: loader.bridgeNodeId,
+      })
+    } else if (videoMatch) {
+      const n = index + 1
+      slots.push({
+        id: `refVideo:${index}`,
+        kind: loader.kind,
+        role: "refVideo",
+        label: `参考视频 ${n}`,
+        help: `提示词里用 <Video ${n}> 指定这段视频负责什么（动作、节奏、机位）。`,
+        nodeId: loader.nodeId,
+        input: loader.input,
+        h3NodeId: h3Id,
+        h3Input: inputName,
+        bridgeNodeId: loader.bridgeNodeId,
+      })
+    } else if (audioMatch) {
+      const n = index + 1
+      slots.push({
+        id: `refAudio:${index}`,
+        kind: loader.kind,
+        role: "refAudio",
+        label: `参考音频 ${n}`,
+        help: `提示词里用 <Audio ${n}> 指定这段声音。`,
+        nodeId: loader.nodeId,
+        input: loader.input,
+        h3NodeId: h3Id,
+        h3Input: inputName,
+        bridgeNodeId: loader.bridgeNodeId,
+      })
+    }
+  }
+
+  return slots
+}
+
 export function detectMapping(workflow: ApiWorkflow): WorkflowMapping {
-  const mapping: WorkflowMapping = { loras: [] }
+  const mapping: WorkflowMapping = { loras: [], media: [] }
   const h3 = findNode(workflow, (_, node) =>
     H3_VIDEO_CLASSES.has(node.class_type)
   )
@@ -127,6 +252,17 @@ export function detectMapping(workflow: ApiWorkflow): WorkflowMapping {
     mapping.prompt = { nodeId: id, input: "prompt" }
     mapping.width = { nodeId: id, input: "width" }
     mapping.height = { nodeId: id, input: "height" }
+
+    const promptLink = linkTarget(node.inputs.prompt)
+    if (promptLink && workflow[promptLink]) {
+      const source = workflow[promptLink]
+      if (
+        source.class_type === "PrimitiveStringMultiline" ||
+        source.class_type === "PrimitiveString"
+      ) {
+        mapping.prompt = { nodeId: promptLink, input: "value" }
+      }
+    }
 
     const durationPrimitive = findNode(workflow, (_, candidate) => {
       const title = nodeTitle(candidate)
@@ -144,17 +280,11 @@ export function detectMapping(workflow: ApiWorkflow): WorkflowMapping {
       mapping.durationUnit = "frames"
     }
 
-    const firstLink = linkTarget(node.inputs.first_frame)
-    if (firstLink && workflow[firstLink] && LOAD_IMAGE_CLASSES.has(workflow[firstLink].class_type)) {
-      mapping.firstFrame = { nodeId: firstLink, input: "image" }
-    } else {
-      const loadImage = findNode(workflow, (_, candidate) =>
-        LOAD_IMAGE_CLASSES.has(candidate.class_type)
-      )
-      if (loadImage) {
-        mapping.firstFrame = { nodeId: loadImage[0], input: "image" }
-      }
-    }
+    mapping.media = detectMediaSlots(workflow, id, node)
+    const firstSlot = mapping.media.find((slot) => slot.role === "firstFrame")
+    const lastSlot = mapping.media.find((slot) => slot.role === "lastFrame")
+    if (firstSlot) mapping.firstFrame = { nodeId: firstSlot.nodeId, input: firstSlot.input }
+    if (lastSlot) mapping.lastFrame = { nodeId: lastSlot.nodeId, input: lastSlot.input }
   }
 
   if (!mapping.prompt) {
@@ -204,6 +334,14 @@ export function detectMapping(workflow: ApiWorkflow): WorkflowMapping {
       })
       continue
     }
+    if (node.class_type === "MiniMaxH3TurboLoRA") {
+      mapping.loras.push({
+        nodeId: id,
+        nameInput: "lora_name",
+        strengthInput: "strength",
+      })
+      continue
+    }
     if (node.class_type === "Power Lora Loader (rgthree)") {
       for (const [key, value] of Object.entries(node.inputs)) {
         if (
@@ -250,10 +388,12 @@ export function mergeMapping(
   const merged: WorkflowMapping = {
     ...detected,
     loras: detected.loras.map((item) => ({ ...item })),
+    media: (detected.media ?? []).map((item) => ({ ...item })),
   }
   if (!overrides) return merged
   applyFieldOverride(merged, overrides, "prompt")
   applyFieldOverride(merged, overrides, "firstFrame")
+  applyFieldOverride(merged, overrides, "lastFrame")
   applyFieldOverride(merged, overrides, "duration")
   applyFieldOverride(merged, overrides, "durationUnit")
   applyFieldOverride(merged, overrides, "width")
@@ -263,6 +403,21 @@ export function mergeMapping(
   applyFieldOverride(merged, overrides, "cfg")
   applyFieldOverride(merged, overrides, "loras")
   return merged
+}
+
+function applyMediaSlot(
+  workflow: ApiWorkflow,
+  slot: MediaSlot,
+  filename: string | undefined
+) {
+  if (filename) {
+    setInput(workflow, { nodeId: slot.nodeId, input: slot.input }, filename)
+    return
+  }
+  const h3 = workflow[slot.h3NodeId]
+  if (h3) delete h3.inputs[slot.h3Input]
+  if (slot.bridgeNodeId) delete workflow[slot.bridgeNodeId]
+  delete workflow[slot.nodeId]
 }
 
 function setInput(
@@ -294,6 +449,11 @@ function setNestedLora(
   }
 }
 
+export type MediaPatch = {
+  slotId: string
+  filename: string
+}
+
 export type PatchValues = {
   prompt: string
   duration: number
@@ -301,6 +461,8 @@ export type PatchValues = {
   height: number
   seed: number
   firstFrameFilename?: string
+  lastFrameFilename?: string
+  media?: MediaPatch[]
   loras: LoraFormValue[]
   steps?: number
   cfg?: number
@@ -337,7 +499,17 @@ export function applyPatch(
     seedNode.inputs.control_after_generate = "fixed"
   }
 
-  if (values.firstFrameFilename && mapping.firstFrame) {
+  const mediaFiles = new Map(
+    (values.media ?? []).map((item) => [item.slotId, item.filename])
+  )
+  if (values.firstFrameFilename) mediaFiles.set("firstFrame", values.firstFrameFilename)
+  if (values.lastFrameFilename) mediaFiles.set("lastFrame", values.lastFrameFilename)
+
+  if ((mapping.media ?? []).length > 0) {
+    for (const slot of mapping.media) {
+      applyMediaSlot(next, slot, mediaFiles.get(slot.id))
+    }
+  } else if (values.firstFrameFilename && mapping.firstFrame) {
     setInput(next, mapping.firstFrame, values.firstFrameFilename)
   } else {
     for (const node of Object.values(next)) {
@@ -345,6 +517,17 @@ export function applyPatch(
         delete node.inputs.first_frame
         delete node.inputs.last_frame
       }
+    }
+    const firstFrameMapping = mapping.firstFrame
+    const firstFrameNode = firstFrameMapping
+      ? next[firstFrameMapping.nodeId]
+      : undefined
+    if (
+      firstFrameNode &&
+      firstFrameMapping &&
+      LOAD_IMAGE_CLASSES.has(firstFrameNode.class_type)
+    ) {
+      delete next[firstFrameMapping.nodeId]
     }
   }
 

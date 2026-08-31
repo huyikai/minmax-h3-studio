@@ -8,6 +8,10 @@ export function workflowsDir() {
   return path.join(rootDir(), "workflows")
 }
 
+export function bundledWorkflowsDir() {
+  return path.join(rootDir(), "templates", "workflows")
+}
+
 export function outputsDir() {
   return path.join(rootDir(), "outputs")
 }

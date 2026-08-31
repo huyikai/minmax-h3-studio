@@ -1,6 +1,7 @@
 import { readSettings, writeSettings } from "@/lib/settings"
 import {
   deleteWorkflowFile,
+  listWorkflowEntries,
   listWorkflowFiles,
   readWorkflowFile,
   writeWorkflowFile,
@@ -14,7 +15,7 @@ import {
 } from "@/lib/workflow-core"
 import type { MappingOverrides } from "@/lib/types"
 
-export { listWorkflowFiles }
+export { listWorkflowFiles, listWorkflowEntries }
 
 export async function parseAndSaveWorkflow(name: string, data: unknown) {
   const parsed = parseApiWorkflow(data)
@@ -50,16 +51,16 @@ export async function saveMappingOverrides(
 }
 
 export async function removeWorkflow(name: string) {
-  const filename = await deleteWorkflowFile(name)
+  const { filename, restored } = await deleteWorkflowFile(name)
   const settings = await readSettings()
   if (settings.mappings[filename]) {
     delete settings.mappings[filename]
   }
-  if (settings.defaultWorkflow === filename) {
+  if (!restored && settings.defaultWorkflow === filename) {
     settings.defaultWorkflow = null
   }
   await writeSettings(settings)
-  return filename
+  return { filename, restored }
 }
 
 export { readWorkflowFile }

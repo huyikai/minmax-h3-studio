@@ -18,9 +18,32 @@ export type LoraMapping = {
   nested?: boolean
 }
 
+export type MediaKind = "image" | "video" | "audio"
+
+export type MediaRole =
+  | "firstFrame"
+  | "lastFrame"
+  | "refImage"
+  | "refVideo"
+  | "refAudio"
+
+export type MediaSlot = {
+  id: string
+  kind: MediaKind
+  role: MediaRole
+  label: string
+  help: string
+  nodeId: string
+  input: string
+  h3NodeId: string
+  h3Input: string
+  bridgeNodeId?: string
+}
+
 export type WorkflowMapping = {
   prompt?: FieldMapping
   firstFrame?: FieldMapping
+  lastFrame?: FieldMapping
   duration?: FieldMapping
   durationUnit?: "seconds" | "frames"
   width?: FieldMapping
@@ -29,11 +52,13 @@ export type WorkflowMapping = {
   steps?: FieldMapping
   cfg?: FieldMapping
   loras: LoraMapping[]
+  media: MediaSlot[]
 }
 
 export type MappingOverrides = {
   prompt?: FieldMapping | null
   firstFrame?: FieldMapping | null
+  lastFrame?: FieldMapping | null
   duration?: FieldMapping | null
   durationUnit?: "seconds" | "frames" | null
   width?: FieldMapping | null
@@ -88,6 +113,8 @@ export type Job = {
   height: number
   seed: number
   firstFrameName?: string
+  lastFrameName?: string
+  mediaNames?: string[]
   loras: LoraFormValue[]
   steps?: number
   cfg?: number
@@ -120,7 +147,7 @@ export const ASPECT_PRESETS = [
   { id: "3:4", label: "3:4", width: 768, height: 1024 },
 ] as const
 
-export const DURATION_OPTIONS = [5, 6, 8, 10, 12, 15] as const
+export const DURATION_OPTIONS = [5, 6, 7, 8, 10, 12, 15] as const
 
 export const DEFAULT_SETTINGS: Settings = {
   comfyHost: "127.0.0.1",

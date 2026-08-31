@@ -1,5 +1,5 @@
 import {
-  listWorkflowFiles,
+  listWorkflowEntries,
   parseAndSaveWorkflow,
   readWorkflowBundle,
 } from "@/lib/workflow-service"
@@ -7,8 +7,11 @@ import {
 export const dynamic = "force-dynamic"
 
 export async function GET() {
-  const files = await listWorkflowFiles()
-  return Response.json({ files })
+  const workflows = await listWorkflowEntries()
+  return Response.json({
+    files: workflows.map((item) => item.name),
+    workflows,
+  })
 }
 
 export async function POST(request: Request) {
