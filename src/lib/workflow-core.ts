@@ -5,10 +5,17 @@ import type {
   LoraFormValue,
   LoraMapping,
   MappingOverrides,
+  MediaKind,
   MediaSlot,
   WorkflowMapping,
 } from "@/lib/types"
 import { ASPECT_PRESETS } from "@/lib/types"
+import {
+  REF_KINDS,
+  REF_LIMITS,
+  parseRefSlotId,
+  refKindLabel,
+} from "@/lib/refs"
 
 const H3_VIDEO_CLASSES = new Set([
   "MiniMaxH3ImageToVideo",
@@ -145,6 +152,8 @@ function resolveLoader(
   return undefined
 }
 
+const REF_INPUT_KEY = /^(ref_images|ref_videos|ref_video_audios|ref_audios)\./
+
 function detectMediaSlots(
   workflow: ApiWorkflow,
   h3Id: string,
@@ -182,60 +191,6 @@ function detectMediaSlots(
       h3Input: "last_frame",
       bridgeNodeId: last.bridgeNodeId,
     })
-  }
-
-  const refEntries = Object.entries(node.inputs).sort(([a], [b]) => a.localeCompare(b))
-  for (const [inputName, value] of refEntries) {
-    const imageMatch = inputName.match(/^ref_images\.ref_image_(\d+)$/)
-    const videoMatch = inputName.match(/^ref_videos\.ref_video_(\d+)$/)
-    const audioMatch = inputName.match(/^ref_audios\.ref_audio_(\d+)$/)
-    const index = Number((imageMatch ?? videoMatch ?? audioMatch)?.[1] ?? -1)
-    if (index < 0) continue
-    const loader = resolveLoader(workflow, linkTarget(value))
-    if (!loader) continue
-    if (imageMatch) {
-      const n = index + 1
-      slots.push({
-        id: `refImage:${index}`,
-        kind: loader.kind,
-        role: "refImage",
-        label: `参考图 ${n}`,
-        help: `提示词里用 <Picture ${n}> 指定这张图负责什么（身份、服装、风格）。`,
-        nodeId: loader.nodeId,
-        input: loader.input,
-        h3NodeId: h3Id,
-        h3Input: inputName,
-        bridgeNodeId: loader.bridgeNodeId,
-      })
-    } else if (videoMatch) {
-      const n = index + 1
-      slots.push({
-        id: `refVideo:${index}`,
-        kind: loader.kind,
-        role: "refVideo",
-        label: `参考视频 ${n}`,
-        help: `提示词里用 <Video ${n}> 指定这段视频负责什么（动作、节奏、机位）。`,
-        nodeId: loader.nodeId,
-        input: loader.input,
-        h3NodeId: h3Id,
-        h3Input: inputName,
-        bridgeNodeId: loader.bridgeNodeId,
-      })
-    } else if (audioMatch) {
-      const n = index + 1
-      slots.push({
-        id: `refAudio:${index}`,
-        kind: loader.kind,
-        role: "refAudio",
-        label: `参考音频 ${n}`,
-        help: `提示词里用 <Audio ${n}> 指定这段声音。`,
-        nodeId: loader.nodeId,
-        input: loader.input,
-        h3NodeId: h3Id,
-        h3Input: inputName,
-        bridgeNodeId: loader.bridgeNodeId,
-      })
-    }
   }
 
   return slots
@@ -280,11 +235,15 @@ export function detectMapping(workflow: ApiWorkflow): WorkflowMapping {
       mapping.durationUnit = "frames"
     }
 
+    mapping.h3NodeId = id
     mapping.media = detectMediaSlots(workflow, id, node)
     const firstSlot = mapping.media.find((slot) => slot.role === "firstFrame")
     const lastSlot = mapping.media.find((slot) => slot.role === "lastFrame")
     if (firstSlot) mapping.firstFrame = { nodeId: firstSlot.nodeId, input: firstSlot.input }
     if (lastSlot) mapping.lastFrame = { nodeId: lastSlot.nodeId, input: lastSlot.input }
+    if (node.class_type === "MiniMaxH3ReferenceToVideo") {
+      mapping.dynamicRefs = true
+    }
   }
 
   if (!mapping.prompt) {
@@ -420,6 +379,107 @@ function applyMediaSlot(
   delete workflow[slot.nodeId]
 }
 
+function nextNumericId(workflow: ApiWorkflow) {
+  let max = 0
+  for (const id of Object.keys(workflow)) {
+    const n = Number(id)
+    if (Number.isInteger(n) && n > max) max = n
+  }
+  return max + 1
+}
+
+function addNode(
+  workflow: ApiWorkflow,
+  node: ComfyNode
+) {
+  const id = String(nextNumericId(workflow))
+  workflow[id] = node
+  return id
+}
+
+function stripRefInputs(workflow: ApiWorkflow, h3Id: string) {
+  const h3 = workflow[h3Id]
+  if (!h3) return
+  const toDelete = new Set<string>()
+  for (const [key, value] of Object.entries(h3.inputs)) {
+    if (!REF_INPUT_KEY.test(key)) continue
+    const target = linkTarget(value)
+    delete h3.inputs[key]
+    const loader = resolveLoader(workflow, target)
+    if (loader) {
+      toDelete.add(loader.nodeId)
+      if (loader.bridgeNodeId) toDelete.add(loader.bridgeNodeId)
+    } else if (target) {
+      toDelete.add(target)
+    }
+  }
+  for (const id of toDelete) {
+    if (id !== h3Id) delete workflow[id]
+  }
+}
+
+function attachDynamicRefs(
+  workflow: ApiWorkflow,
+  h3Id: string,
+  patches: MediaPatch[]
+) {
+  const h3 = workflow[h3Id]
+  if (!h3) return
+
+  const grouped: Record<MediaKind, Array<{ index: number; filename: string }>> = {
+    image: [],
+    video: [],
+    audio: [],
+  }
+  for (const patch of patches) {
+    const parsed =
+      patch.kind !== undefined && patch.index !== undefined
+        ? { kind: patch.kind, index: patch.index }
+        : parseRefSlotId(patch.slotId)
+    if (!parsed) continue
+    grouped[parsed.kind].push({ index: parsed.index, filename: patch.filename })
+  }
+
+  for (const kind of REF_KINDS) {
+    const items = grouped[kind]
+      .sort((a, b) => a.index - b.index)
+      .slice(0, REF_LIMITS[kind])
+    items.forEach((item, index) => {
+      const n = index + 1
+      const label = `${refKindLabel(kind)} ${n}`
+      if (kind === "image") {
+        const nodeId = addNode(workflow, {
+          class_type: "LoadImage",
+          inputs: { image: item.filename },
+          _meta: { title: label },
+        })
+        h3.inputs[`ref_images.ref_image_${index}`] = [nodeId, 0]
+        return
+      }
+      if (kind === "video") {
+        const loadId = addNode(workflow, {
+          class_type: "LoadVideo",
+          inputs: { file: item.filename },
+          _meta: { title: label },
+        })
+        const splitId = addNode(workflow, {
+          class_type: "GetVideoComponents",
+          inputs: { video: [loadId, 0] },
+          _meta: { title: `${label} 拆帧` },
+        })
+        h3.inputs[`ref_videos.ref_video_${index}`] = [splitId, 0]
+        return
+      }
+      const nodeId = addNode(workflow, {
+        class_type: "LoadAudio",
+        inputs: { audio: item.filename },
+        _meta: { title: label },
+      })
+      h3.inputs[`ref_audios.ref_audio_${index}`] = [nodeId, 0]
+    })
+  }
+}
+
 function setInput(
   workflow: ApiWorkflow,
   mapping: FieldMapping | undefined,
@@ -452,6 +512,8 @@ function setNestedLora(
 export type MediaPatch = {
   slotId: string
   filename: string
+  kind?: MediaKind
+  index?: number
 }
 
 export type PatchValues = {
@@ -505,8 +567,15 @@ export function applyPatch(
   if (values.firstFrameFilename) mediaFiles.set("firstFrame", values.firstFrameFilename)
   if (values.lastFrameFilename) mediaFiles.set("lastFrame", values.lastFrameFilename)
 
-  if ((mapping.media ?? []).length > 0) {
-    for (const slot of mapping.media) {
+  if (mapping.dynamicRefs && mapping.h3NodeId) {
+    stripRefInputs(next, mapping.h3NodeId)
+  }
+
+  const graphSlots = (mapping.media ?? []).filter(
+    (slot) => slot.role === "firstFrame" || slot.role === "lastFrame"
+  )
+  if (graphSlots.length > 0) {
+    for (const slot of graphSlots) {
       applyMediaSlot(next, slot, mediaFiles.get(slot.id))
     }
   } else if (values.firstFrameFilename && mapping.firstFrame) {
@@ -529,6 +598,10 @@ export function applyPatch(
     ) {
       delete next[firstFrameMapping.nodeId]
     }
+  }
+
+  if (mapping.dynamicRefs && mapping.h3NodeId) {
+    attachDynamicRefs(next, mapping.h3NodeId, values.media ?? [])
   }
 
   for (const lora of values.loras) {

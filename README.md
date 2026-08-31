@@ -31,7 +31,7 @@ pnpm start
 
 ## 默认工作流
 
-Studio 自带七份 **API 格式**预设。上传区只显示当前图里真正接上的参考口：
+Studio 自带六份 **API 格式**预设。文生 / 图生 / 首尾帧的上传区只显示当前图里真正接上的口；参考生是一份图，下面按需要加参考：
 
 | 下拉名称 | 文件 | 说明 |
 | --- | --- | --- |
@@ -40,10 +40,9 @@ Studio 自带七份 **API 格式**预设。上传区只显示当前图里真正�
 | 官方 · 首尾帧 | `h3-flf.json` | 20 步，首帧 + 尾帧 |
 | Turbo · 文生 | `h3-t2v-turbo.json` | 6 步 + Turbo LoRA |
 | Turbo · 图生 | `h3-i2v-turbo.json` | 6 步 + 首帧 |
-| 参考生 · 图 | `h3-r2v.json` | Ref2VA，两张参考图 |
-| 参考生 · 视频 | `h3-r2v-video.json` | Ref2VA，参考图 + 参考视频 |
+| 官方 · 参考生 | `h3-r2v.json` | Ref2VA。可加参考图 / 视频 / 音频，最多 9 / 3 / 3 |
 
-参考生提示词按 [Comfy 官方说明](https://docs.comfy.org/zh/tutorials/video/minimax/minimax-h3) 用 `<Picture 1>`、`<Picture 2>`、`<Video 1>` 引用，并给每个参考分配任务。
+参考生提示词按 [Comfy 官方说明](https://docs.comfy.org/zh/tutorials/video/minimax/minimax-h3) 用 `<Picture 1>`、`<Video 1>`、`<Audio 1>` 按类型顺序引用，并给每个参考分配任务。
 
 不收录：
 
@@ -61,7 +60,7 @@ Studio 自带七份 **API 格式**预设。上传区只显示当前图里真正�
 | 提示词 / 分辨率 / 帧数 | `MiniMaxH3ImageToVideo` / `MiniMaxH3ReferenceToVideo` |
 | 时长（秒） | 标题含 duration 的 `PrimitiveFloat` |
 | 首帧 / 尾帧 | 接到 `first_frame` / `last_frame` 的 `LoadImage` |
-| 参考图 / 参考视频 | 接到 `ref_images.*` / `ref_videos.*` 的 `LoadImage` / `LoadVideo` |
+| 参考 | `MiniMaxH3ReferenceToVideo`：界面按限额添加，提交时再接线 |
 | Seed | `RandomNoise` / `KSampler` |
 | 步数 | `BasicScheduler` |
 | LoRA | `LoraLoader` / `LoraLoaderModelOnly` / `MiniMaxH3TurboLoRA` / rgthree Power LoRA |

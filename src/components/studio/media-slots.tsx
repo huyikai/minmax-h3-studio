@@ -7,6 +7,7 @@ import { Field, FieldDescription } from "@/components/ui/field"
 import { LabelWithHelp } from "@/components/studio/field-help"
 import { cn } from "@/lib/utils"
 import type { MediaSlot } from "@/lib/types"
+import { fileMatchesKind } from "@/lib/refs"
 
 export type SlotFile = {
   file: File
@@ -65,11 +66,11 @@ function MediaSlotField({
         onDrop={(event) => {
           event.preventDefault()
           const file = event.dataTransfer.files[0]
-          if (file && matchesKind(file, slot.kind)) onChange(file)
+          if (file && fileMatchesKind(file, slot.kind)) onChange(file)
         }}
         onPaste={(event) => {
           const file = [...event.clipboardData.files][0]
-          if (file && matchesKind(file, slot.kind)) onChange(file)
+          if (file && fileMatchesKind(file, slot.kind)) onChange(file)
         }}
       >
         {current ? (
@@ -138,10 +139,4 @@ function MediaSlotField({
       ) : null}
     </Field>
   )
-}
-
-function matchesKind(file: File, kind: MediaSlot["kind"]) {
-  if (kind === "video") return file.type.startsWith("video/")
-  if (kind === "audio") return file.type.startsWith("audio/")
-  return file.type.startsWith("image/")
 }

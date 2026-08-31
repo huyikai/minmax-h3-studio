@@ -225,36 +225,10 @@
         "107",
         1
       ],
-      "ref_image_size": "match",
-      "ref_images.ref_image_0": [
-        "137",
-        0
-      ],
-      "ref_images.ref_image_1": [
-        "139",
-        0
-      ]
+      "ref_image_size": "match"
     },
     "_meta": {
       "title": "MiniMax H3 Reference to Video"
-    }
-  },
-  "137": {
-    "class_type": "LoadImage",
-    "inputs": {
-      "image": "ref_image_1.png"
-    },
-    "_meta": {
-      "title": "Ref Image 1"
-    }
-  },
-  "139": {
-    "class_type": "LoadImage",
-    "inputs": {
-      "image": "ref_image_2.png"
-    },
-    "_meta": {
-      "title": "Ref Image 2"
     }
   }
 }

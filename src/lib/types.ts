@@ -53,6 +53,8 @@ export type WorkflowMapping = {
   cfg?: FieldMapping
   loras: LoraMapping[]
   media: MediaSlot[]
+  dynamicRefs?: boolean
+  h3NodeId?: string
 }
 
 export type MappingOverrides = {

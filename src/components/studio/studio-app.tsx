@@ -54,71 +54,52 @@ import {
 } from "@/components/ui/alert-dialog"
 import { LabelWithHelp } from "@/components/studio/field-help"
 import { MediaSlots, type SlotFile } from "@/components/studio/media-slots"
+import { PromptGuide } from "@/components/studio/prompt-guide"
+import {
+  ReferenceSlots,
+  taggedRefs,
+  type RefDraft,
+} from "@/components/studio/reference-slots"
 import { SettingsDialog } from "@/components/studio/settings-dialog"
 import type { WorkflowBundle } from "@/components/studio/types"
-import type { HealthStatus, LoraFormValue, PublicJob } from "@/lib/types"
+import type { HealthStatus, LoraFormValue, MediaKind, PublicJob } from "@/lib/types"
 import { ASPECT_PRESETS, DURATION_OPTIONS } from "@/lib/types"
 import type { WorkflowListItem } from "@/lib/default-workflows"
+import {
+  REF_LIMITS,
+  WORKFLOW_ALIASES,
+  fileMatchesKind,
+  refKindLabel,
+  refSlotId,
+} from "@/lib/refs"
+import { resolveGuideMode } from "@/lib/prompt-guide"
 import { cn } from "@/lib/utils"
 
-const PROMPT_CHAR_SOFT_LIMIT = 1000
-
-const T2V_PLACEHOLDER = `先写场景与人物，再按时间写出镜头运动。对白和环境音写在同一段里。不要写 BGM/配乐，会烧进片子。
-
-例如：
-黄昏的海边栈道，一位穿红色风衣的女人面向镜头。
-[0s-3s] 中景，海风吹动头发，镜头缓慢前推。
-[3s-6s] 切到侧脸特写，她开口说话。
-对白：「回来了。」
-环境音：浪声、远处海鸥。`
-
-const I2V_PLACEHOLDER = `从这张首帧开始写运动，不要复述已经能看见的静帧细节。锁住身份、服装、场景。
-
-例如：
-从首帧开始，女人慢慢站起，走向镜头，停住后侧头看向窗外的雨。
-[0s-3s] 中景，手持微推。
-[3s-5s] 停在半身，头发被风吹起。
-保持同一张脸、红风衣、窗边座位和暖色灯光。
-对白：「回来了。」
-环境音：雨声、远处车流。`
-
-const FLF_PLACEHOLDER = `首帧是起点，尾帧是终点。写中间怎么过渡，不要复述两张静帧里已经能看见的细节。
-
-例如：
-从首帧的站姿走到尾帧的坐姿。锁住同一张脸、红风衣和窗边座位。
-[0s-3s] 中景，手持微推，她转身走向椅子。
-[3s-5s] 坐下，看向窗外的雨。
-对白：「回来了。」
-环境音：雨声、远处车流。`
-
-const R2V_PLACEHOLDER = `按连接顺序用标签引用参考，并给每个参考分配任务。不要把两张参考混成一个人。
-
-例如：
-人物身份和服装以 <Picture 1> 为准。动作、节奏和机位以 <Video 1> 为准。
-镜头：固定中景，不要推拉。
-[0s-3s] 先看镜头，再按 <Video 1> 的节奏做同一个动作。
-对白：「回来了。」
-环境音：室内底噪。`
+const PROMPT_PLACEHOLDER = "聚焦后右侧显示写法"
 
 function promptCoachHint(input: {
   hasFirstFrame: boolean
   hasLastFrame: boolean
-  hasRefs: boolean
+  refTags: string[]
+  dynamicRefs: boolean
   durationSeconds: number
 }) {
-  if (input.hasRefs) {
-    return "用 <Picture 1>、<Video 1> 引用参考，并写清每个参考负责身份、服装还是动作。"
+  if (input.dynamicRefs) {
+    if (input.refTags.length) {
+      return `已加 ${input.refTags.join("、")}。点开写法按段插入；提示词建议英文。`
+    }
+    return "聚焦提示词查看写法。参考生先定义标签，再写画面。"
   }
   if (input.hasLastFrame) {
-    return "写从首帧过渡到尾帧的运动，不要复述两张静帧里已经能看见的细节。"
+    return "首尾帧：先插入对齐句，再写两帧之间的过渡。聚焦后右侧可对照。"
   }
   if (input.hasFirstFrame) {
-    return "有首帧时写画面怎么动，不要复述已经能看见的静帧。"
+    return "图生：先插入对齐句，从首帧写运动。聚焦后右侧可对照。"
   }
   if (input.durationSeconds >= 13) {
-    return "13-15 秒要有一条清楚的动作推进，不要堆互不相关的场面。"
+    return "13-15 秒要有一条清楚的动作推进。聚焦提示词查看写法。"
   }
-  return "微调时锁住身份和场景，只改动作。"
+  return "聚焦提示词，右侧对照官方字段。正文建议英文。"
 }
 
 function randomSeed() {
@@ -187,7 +168,12 @@ export function StudioApp() {
   const [loras, setLoras] = useState<LoraFormValue[]>([])
   const [loraFiles, setLoraFiles] = useState<string[]>([])
   const [slotFiles, setSlotFiles] = useState<Record<string, SlotFile>>({})
+  const [refDrafts, setRefDrafts] = useState<RefDraft[]>([])
+  const [guideOpen, setGuideOpen] = useState(false)
+  const [guidePinned, setGuidePinned] = useState(false)
   const eventSourceRef = useRef<EventSource | null>(null)
+  const textareaRef = useRef<HTMLTextAreaElement>(null)
+  const monitorRef = useRef<HTMLElement>(null)
 
   const connected = Boolean(health?.ok)
   const busy = Boolean(
@@ -230,11 +216,19 @@ export function StudioApp() {
       }))
     setWorkflows(list)
     const names = list.map((item) => item.name)
+    const resolveName = (name?: string | null) => {
+      if (!name) return name
+      const aliased = WORKFLOW_ALIASES[name]
+      if (aliased && names.includes(aliased)) return aliased
+      return name
+    }
+    const keepName = resolveName(keep)
+    const preferredName = resolveName(preferred)
     const next =
-      keep && names.includes(keep)
-        ? keep
-        : preferred && names.includes(preferred)
-          ? preferred
+      keepName && names.includes(keepName)
+        ? keepName
+        : preferredName && names.includes(preferredName)
+          ? preferredName
           : (names[0] ?? "")
     setWorkflowName(next)
     return { files: names, selected: next }
@@ -254,6 +248,12 @@ export function StudioApp() {
         URL.revokeObjectURL(item.preview)
       }
       return {}
+    })
+    setRefDrafts((previous) => {
+      for (const item of previous) {
+        URL.revokeObjectURL(item.preview)
+      }
+      return []
     })
   }, [])
 
@@ -348,6 +348,34 @@ export function StudioApp() {
     })
   }
 
+  function addRefFiles(kind: MediaKind, files: File[]) {
+    setRefDrafts((previous) => {
+      const used = previous.filter((item) => item.kind === kind).length
+      const room = REF_LIMITS[kind] - used
+      const accepted = files.filter((file) => fileMatchesKind(file, kind)).slice(0, Math.max(0, room))
+      if (accepted.length < files.filter((file) => fileMatchesKind(file, kind)).length) {
+        toast.error(`${refKindLabel(kind)}最多 ${REF_LIMITS[kind]} 个`)
+      }
+      return [
+        ...previous,
+        ...accepted.map((file) => ({
+          id: crypto.randomUUID(),
+          kind,
+          file,
+          preview: URL.createObjectURL(file),
+        })),
+      ]
+    })
+  }
+
+  function removeRefDraft(id: string) {
+    setRefDrafts((previous) => {
+      const current = previous.find((item) => item.id === id)
+      if (current) URL.revokeObjectURL(current.preview)
+      return previous.filter((item) => item.id !== id)
+    })
+  }
+
   const progressPercent = useMemo(() => {
     if (!current?.progress?.max) return busy ? 8 : 0
     return Math.min(
@@ -379,6 +407,11 @@ export function StudioApp() {
       if (cfg && bundle?.mapping.cfg) form.set("cfg", cfg)
       for (const [slotId, item] of Object.entries(slotFiles)) {
         form.set(`media:${slotId}`, item.file)
+      }
+      if (bundle?.mapping.dynamicRefs) {
+        for (const item of taggedRefs(refDrafts)) {
+          form.set(`media:${refSlotId(item.kind, item.index)}`, item.file)
+        }
       }
       if (randomize) setSeed(Number(form.get("seed")))
 
@@ -418,7 +451,9 @@ export function StudioApp() {
     setSteps(job.steps !== undefined ? String(job.steps) : "")
     setCfg(job.cfg !== undefined ? String(job.cfg) : "")
     setLoras(job.loras)
-    if (job.workflowFile) setWorkflowName(job.workflowFile)
+    if (job.workflowFile) {
+      setWorkflowName(WORKFLOW_ALIASES[job.workflowFile] ?? job.workflowFile)
+    }
   }
 
   const mappingHints = bundle
@@ -426,12 +461,7 @@ export function StudioApp() {
         bundle.mapping.prompt ? "提示词" : null,
         bundle.mapping.firstFrame ? "首帧" : null,
         bundle.mapping.lastFrame ? "尾帧" : null,
-        bundle.mapping.media?.some((slot) => slot.role === "refImage")
-          ? "参考图"
-          : null,
-        bundle.mapping.media?.some((slot) => slot.role === "refVideo")
-          ? "参考视频"
-          : null,
+        bundle.mapping.dynamicRefs ? "参考（可添加）" : null,
         bundle.mapping.duration ? "时长" : null,
         bundle.mapping.seed ? "seed" : null,
         bundle.mapping.loras.length ? `LoRA ×${bundle.mapping.loras.length}` : null,
@@ -439,34 +469,31 @@ export function StudioApp() {
     : []
 
   const durationSeconds = Number(duration) || 0
-  const mediaSlots = bundle?.mapping.media ?? []
+  const mediaSlots = (bundle?.mapping.media ?? []).filter(
+    (slot) => slot.role === "firstFrame" || slot.role === "lastFrame"
+  )
   const hasFirstFrameMapping = Boolean(
     mediaSlots.some((slot) => slot.role === "firstFrame")
   )
   const hasLastFrameMapping = Boolean(
     mediaSlots.some((slot) => slot.role === "lastFrame")
   )
-  const hasRefs = mediaSlots.some(
-    (slot) =>
-      slot.role === "refImage" ||
-      slot.role === "refVideo" ||
-      slot.role === "refAudio"
-  )
+  const dynamicRefs = Boolean(bundle?.mapping.dynamicRefs)
+  const taggedDrafts = taggedRefs(refDrafts)
   const usingFirstFrame = Boolean(slotFiles.firstFrame && hasFirstFrameMapping)
+  const guideMode = resolveGuideMode({
+    dynamicRefs,
+    hasLastFrame: hasLastFrameMapping,
+    hasFirstFrame: hasFirstFrameMapping,
+  })
   const promptHint = promptCoachHint({
     hasFirstFrame: usingFirstFrame,
     hasLastFrame: Boolean(slotFiles.lastFrame && hasLastFrameMapping),
-    hasRefs,
+    refTags: taggedDrafts.map((item) => item.tag),
+    dynamicRefs,
     durationSeconds,
   })
-  const promptPlaceholder = hasRefs
-    ? R2V_PLACEHOLDER
-    : hasLastFrameMapping
-      ? FLF_PLACEHOLDER
-      : usingFirstFrame
-        ? I2V_PLACEHOLDER
-        : T2V_PLACEHOLDER
-  const promptOverLimit = prompt.length > PROMPT_CHAR_SOFT_LIMIT
+  const guideVisible = guideOpen || guidePinned
   const hasSteps = Boolean(bundle?.mapping.steps)
   const hasCfg = Boolean(bundle?.mapping.cfg)
   const grouped = groupWorkflows(workflows)
@@ -658,25 +685,23 @@ export function StudioApp() {
                 <Field>
                   <div className="flex items-baseline justify-between gap-3">
                     <LabelWithHelp htmlFor="prompt" label="提示词">
-                      写给 H3 的画面、镜头和对白。对白用原文；不要写配乐，会烧进片子。
+                      正文建议英文。对白、歌词、画面上的字保留原文。观众配乐写在
+                      non_diegetic_music，没有就写 N/A。
                     </LabelWithHelp>
                     <span
-                      className={cn(
-                        "font-mono text-[11px] tabular-nums",
-                        promptOverLimit
-                          ? "text-primary"
-                          : "text-muted-foreground"
-                      )}
-                      aria-label={`字数 ${prompt.length}，建议不超过 ${PROMPT_CHAR_SOFT_LIMIT}`}
+                      className="font-mono text-[11px] tabular-nums text-muted-foreground"
+                      aria-label={`字数 ${prompt.length}`}
                     >
-                      {prompt.length} / {PROMPT_CHAR_SOFT_LIMIT}
+                      {prompt.length}
                     </span>
                   </div>
                   <Textarea
+                    ref={textareaRef}
                     id="prompt"
                     value={prompt}
                     onChange={(event) => setPrompt(event.target.value)}
-                    placeholder={promptPlaceholder}
+                    onFocus={() => setGuideOpen(true)}
+                    placeholder={PROMPT_PLACEHOLDER}
                     aria-describedby="prompt-hint"
                     className="min-h-44"
                   />
@@ -688,6 +713,14 @@ export function StudioApp() {
                   files={slotFiles}
                   onChange={setSlotFile}
                 />
+
+                {dynamicRefs ? (
+                  <ReferenceSlots
+                    drafts={refDrafts}
+                    onAdd={addRefFiles}
+                    onRemove={removeRefDraft}
+                  />
+                ) : null}
 
                 <Field>
                   <LabelWithHelp label="时长">
@@ -743,7 +776,7 @@ export function StudioApp() {
 
                 <Field>
                   <LabelWithHelp htmlFor="seed" label="Seed">
-                    随机种子。相同提示词和 seed 更容易复现；打开「随机」则每次换一个。
+                    这是这次成片的编号。数字大小没有好坏，换一个等于重新抽一次构图和口气；提示词和参数不变时，同一个编号更容易长得像。默认每次换编号。看中了就关掉「随机」，锁住框里刚生成用过的那个数；或者点右侧历史里那一条，再生成就不会另抽。
                   </LabelWithHelp>
                   <div className="flex items-center gap-2">
                     <Input
@@ -895,7 +928,10 @@ export function StudioApp() {
           ) : null}
         </section>
 
-        <section className="flex min-h-0 flex-col gap-4 p-4 lg:max-h-[calc(100dvh-3.75rem)] lg:overflow-hidden">
+        <section
+          ref={monitorRef}
+          className="flex min-h-0 flex-col gap-4 p-4 lg:max-h-[calc(100dvh-3.75rem)] lg:overflow-hidden"
+        >
           <div className="flex min-h-72 flex-1 flex-col overflow-hidden rounded-xl border bg-card">
             <div className="flex items-center justify-between gap-3 border-b px-4 py-2.5">
               <span className="text-sm font-medium">成片</span>
@@ -1047,6 +1083,35 @@ export function StudioApp() {
           </div>
         </section>
       </div>
+
+      <PromptGuide
+        open={guideVisible}
+        pinned={guidePinned}
+        compact={busy && guidePinned}
+        mode={guideMode}
+        duration={durationSeconds}
+        prompt={prompt}
+        textareaRef={textareaRef}
+        monitorRef={monitorRef}
+        onPinnedChange={(next) => {
+          setGuidePinned(next)
+          if (next) setGuideOpen(true)
+          else if (document.activeElement !== textareaRef.current) {
+            setGuideOpen(false)
+          }
+        }}
+        onClose={() => setGuideOpen(false)}
+        onApply={(next, selection) => {
+          setPrompt(next)
+          setGuideOpen(true)
+          requestAnimationFrame(() => {
+            const el = textareaRef.current
+            if (!el) return
+            el.focus()
+            el.setSelectionRange(selection.start, selection.end)
+          })
+        }}
+      />
 
       <SettingsDialog
         open={settingsOpen}

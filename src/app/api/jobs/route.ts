@@ -1,12 +1,19 @@
 import { randomUUID } from "node:crypto"
 import { ASPECT_PRESETS } from "@/lib/types"
-import type { Job, LoraFormValue } from "@/lib/types"
+import type { Job, LoraFormValue, MediaKind, WorkflowMapping } from "@/lib/types"
 import { getActiveJob, listJobs, toPublicJob, upsertJob } from "@/lib/jobs"
 import { readSettings, writeSettings } from "@/lib/settings"
 import { getHealth, newClientId, submitPrompt, uploadInputFile } from "@/lib/comfy"
 import { applyPatch, parseApiWorkflow, type MediaPatch } from "@/lib/workflow-core"
 import { readWorkflowBundle, readWorkflowFile } from "@/lib/workflow-service"
 import { ensureJobWatch, writeSubmittedWorkflow } from "@/lib/runner"
+import {
+  REF_KINDS,
+  REF_LIMITS,
+  parseRefSlotId,
+  refKindLabel,
+  refSlotId,
+} from "@/lib/refs"
 
 export const dynamic = "force-dynamic"
 
@@ -77,24 +84,21 @@ export async function POST(request: Request) {
   const { data } = await readWorkflowFile(workflowFile)
   const workflow = parseApiWorkflow(data)
 
-  const media: MediaPatch[] = []
-  const mediaNames: string[] = []
+  let media: MediaPatch[]
+  let mediaNames: string[]
   let firstFrameName: string | undefined
   let lastFrameName: string | undefined
-
-  for (const slot of bundle.mapping.media ?? []) {
-    const raw = form.get(`media:${slot.id}`)
-    if (!(raw instanceof File) || raw.size <= 0) continue
-    const bytes = Buffer.from(await raw.arrayBuffer())
-    const filename = await uploadInputFile({
-      filename: raw.name || `${slot.id}.bin`,
-      bytes,
-      contentType: raw.type || "application/octet-stream",
-    }, `上传${slot.label}失败`)
-    media.push({ slotId: slot.id, filename })
-    mediaNames.push(raw.name)
-    if (slot.role === "firstFrame") firstFrameName = raw.name
-    if (slot.role === "lastFrame") lastFrameName = raw.name
+  try {
+    const collected = await collectUploadedMedia(form, bundle.mapping)
+    media = collected.media
+    mediaNames = collected.mediaNames
+    firstFrameName = collected.firstFrameName
+    lastFrameName = collected.lastFrameName
+  } catch (error) {
+    return Response.json(
+      { error: error instanceof Error ? error.message : "参考文件无效" },
+      { status: 400 }
+    )
   }
 
   const patched = applyPatch(workflow, bundle.mapping, {
@@ -160,6 +164,73 @@ export async function POST(request: Request) {
       { status: 502 }
     )
   }
+}
+
+async function collectUploadedMedia(form: FormData, mapping: WorkflowMapping) {
+  const uploads = new Map<string, File>()
+  for (const [key, value] of form.entries()) {
+    if (!key.startsWith("media:")) continue
+    if (!(value instanceof File) || value.size <= 0) continue
+    uploads.set(key.slice("media:".length), value)
+  }
+
+  const media: MediaPatch[] = []
+  const mediaNames: string[] = []
+  let firstFrameName: string | undefined
+  let lastFrameName: string | undefined
+
+  async function uploadOne(slotId: string, file: File, label: string, extra?: Pick<MediaPatch, "kind" | "index">) {
+    const filename = await uploadInputFile(
+      {
+        filename: file.name || `${slotId}.bin`,
+        bytes: Buffer.from(await file.arrayBuffer()),
+        contentType: file.type || "application/octet-stream",
+      },
+      `上传${label}失败`
+    )
+    media.push({ slotId, filename, ...extra })
+    mediaNames.push(file.name)
+    return file.name
+  }
+
+  for (const slot of mapping.media ?? []) {
+    if (slot.role === "refImage" || slot.role === "refVideo" || slot.role === "refAudio") {
+      continue
+    }
+    const file = uploads.get(slot.id)
+    if (!file) continue
+    const name = await uploadOne(slot.id, file, slot.label)
+    if (slot.role === "firstFrame") firstFrameName = name
+    if (slot.role === "lastFrame") lastFrameName = name
+  }
+
+  if (mapping.dynamicRefs) {
+    const grouped: Record<MediaKind, Array<{ index: number; file: File }>> = {
+      image: [],
+      video: [],
+      audio: [],
+    }
+    for (const [slotId, file] of uploads) {
+      const parsed = parseRefSlotId(slotId)
+      if (!parsed) continue
+      grouped[parsed.kind].push({ index: parsed.index, file })
+    }
+    for (const kind of REF_KINDS) {
+      const items = grouped[kind].sort((a, b) => a.index - b.index)
+      if (items.length > REF_LIMITS[kind]) {
+        throw new Error(`${refKindLabel(kind)}最多 ${REF_LIMITS[kind]} 个`)
+      }
+      for (let index = 0; index < items.length; index++) {
+        const slotId = refSlotId(kind, index)
+        await uploadOne(slotId, items[index].file, `${refKindLabel(kind)} ${index + 1}`, {
+          kind,
+          index,
+        })
+      }
+    }
+  }
+
+  return { media, mediaNames, firstFrameName, lastFrameName }
 }
 
 function parseLoras(raw: string): LoraFormValue[] {

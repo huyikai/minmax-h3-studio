@@ -49,14 +49,8 @@ export const BUNDLED_WORKFLOWS: BundledWorkflow[] = [
   },
   {
     file: "h3-r2v.json",
-    label: "参考生 · 图",
-    description: "Ref2VA。两张参考图，提示词里用 <Picture 1> / <Picture 2>。",
-    family: "reference",
-  },
-  {
-    file: "h3-r2v-video.json",
-    label: "参考生 · 视频",
-    description: "Ref2VA。一张参考图 + 一段参考视频，用 <Picture 1> / <Video 1>。",
+    label: "官方 · 参考生",
+    description: "Ref2VA。按需要加参考图、视频、音频，最多 9 / 3 / 3。",
     family: "reference",
   },
 ]

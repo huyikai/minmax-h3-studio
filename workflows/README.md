@@ -9,4 +9,4 @@ Studio 自带的官方 / Turbo 预设在仓库的 `templates/workflows/`，不�
 3. 把 JSON 放到这个目录，或在 Studio 设置页上传。
 4. 文件名若与预设相同（例如 `h3-t2v.json`），会覆盖那份预设。删掉这个目录里的同名文件即恢复。
 
-Studio 会按节点类型自动识别提示词、时长、seed、LoRA 和 LoadImage。认错时到设置里改映射。
+Studio 会按节点类型自动识别提示词、时长、seed、LoRA。文生 / 图生 / 首尾帧会识别接到首帧、尾帧的 LoadImage。参考生不必在 JSON 里预接参考口，主界面按限额添加即可。认错时到设置里改映射。

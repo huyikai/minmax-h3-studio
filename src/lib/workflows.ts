@@ -6,6 +6,7 @@ import {
   type WorkflowListItem,
 } from "@/lib/default-workflows"
 import { bundledWorkflowsDir, workflowsDir } from "@/lib/paths"
+import { WORKFLOW_ALIASES } from "@/lib/refs"
 
 const JSON_EXT = ".json"
 
@@ -97,6 +98,10 @@ export async function readWorkflowFile(name: string) {
   const userPath = path.join(workflowsDir(), filename)
   if (await userWorkflowExists(filename)) {
     return { filename, data: await readJsonFile(userPath), source: "user" as const }
+  }
+  const aliased = WORKFLOW_ALIASES[filename]
+  if (aliased && aliased !== filename) {
+    return readWorkflowFile(aliased)
   }
   if (isBundledWorkflow(filename)) {
     const bundledPath = path.join(bundledWorkflowsDir(), filename)
