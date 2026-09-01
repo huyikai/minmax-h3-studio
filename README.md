@@ -2,16 +2,17 @@
 
 本地运行的视频创作界面。它不运行模型本身，而是把 MiniMax H3 工作流包成单页出片工具：写提示词、按当前图上传参考、看进度、把成片留在本机。
 
-适合已经在本机部署了 MiniMax H3 + ComfyUI 的人。Studio 不会代装 ComfyUI，也不会代下模型。
+Studio 不会代装 ComfyUI。连上本机 Comfy 之后，可在设置「环境」里校验目录、复制长视频节点、下载或登记 H3 权重。
 
 ## 你需要先有什么
 
 - Node.js 20+
 - pnpm
-- 本机正在运行的 ComfyUI（默认 `127.0.0.1:8188`）
-- 量化剪枝版 FL2VA 权重（文生 / 图生 / 首尾帧）
+- 本机正在运行的 ComfyUI（默认 `127.0.0.1:8188`，需要带 MiniMax H3 的版本）
+- 量化剪枝版 FL2VA 权重（文生 / 图生 / 首尾帧）。可在设置「环境」里下载到 Comfy 的 `models/`，或登记已有目录
 - 参考生还需要 Ref2VA 权重（`minimax_h3_ref2va_pruned_int8_convrot.safetensors`）
-- 若用 Turbo：加速 LoRA，以及 [ComfyUI-MiniMax-H3-Turbo](https://github.com/Larryvrh/ComfyUI-MiniMax-H3-Turbo) 自定义节点
+- 若用 Turbo：加速 LoRA，以及 [ComfyUI-MiniMax-H3-Turbo](https://github.com/Larryvrh/ComfyUI-MiniMax-H3-Turbo) 自定义节点（Studio 这轮不代装）
+- 长视频：设置「环境」会把内置的 Motion Context 节点复制进 `custom_nodes`，然后请你重启 ComfyUI
 
 ## 启动
 

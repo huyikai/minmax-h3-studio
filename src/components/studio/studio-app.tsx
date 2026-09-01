@@ -3,16 +3,17 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react"
 import { toast } from "sonner"
 import {
+  ArrowLeftIcon,
   ClapperboardIcon,
-  DownloadIcon,
   ExternalLinkIcon,
+  FilmIcon,
+  PlayIcon,
   PlusIcon,
   RefreshCwIcon,
   Settings2Icon,
-  SquareIcon,
 } from "lucide-react"
 import { Button } from "@/components/ui/button"
-import { Progress } from "@/components/ui/progress"
+import { Badge } from "@/components/ui/badge"
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert"
 import {
   Empty,
@@ -32,7 +33,7 @@ import {
   AlertDialogHeader,
   AlertDialogTitle,
 } from "@/components/ui/alert-dialog"
-import { ComposeDialog } from "@/components/studio/compose-dialog"
+import { Spinner } from "@/components/ui/spinner"
 import { ComposeForm } from "@/components/studio/compose-form"
 import { PromptGuide } from "@/components/studio/prompt-guide"
 import { type SlotFile } from "@/components/studio/media-slots"
@@ -41,10 +42,15 @@ import {
   type RefDraft,
 } from "@/components/studio/reference-slots"
 import { SettingsDialog } from "@/components/studio/settings-dialog"
-import { TaskList, isBusyJob, statusLabel } from "@/components/studio/task-list"
+import { TaskList } from "@/components/studio/task-list"
+import { QueuePanel } from "@/components/studio/queue-panel"
+import { MonitorPanel, type MonitorMode } from "@/components/studio/monitor-panel"
+import { LongWorkspace, type LongGeneratePayload } from "@/components/studio/long-workspace"
 import type { WorkflowBundle } from "@/components/studio/types"
-import type { HealthStatus, LoraFormValue, MediaKind, PublicJob } from "@/lib/types"
+import type { HealthStatus, LoraFormValue, MediaKind, PublicJob, StudioQueueSnapshot } from "@/lib/types"
 import type { WorkflowListItem } from "@/lib/default-workflows"
+import { workflowEnvironmentLine } from "@/lib/default-workflows"
+import type { EnvironmentLine, EnvironmentStatus } from "@/lib/environment-types"
 import {
   REF_LIMITS,
   WORKFLOW_ALIASES,
@@ -53,7 +59,13 @@ import {
   refSlotId,
 } from "@/lib/refs"
 import { resolveGuideMode } from "@/lib/prompt-guide"
+import { isBusyJob, isLongJob, isWaitingJob } from "@/lib/job-view"
+import { waitingSegment } from "@/lib/long-video"
 import { cn } from "@/lib/utils"
+
+function emptyQueue(): StudioQueueSnapshot {
+  return { paused: false, remaining: 0, items: [] }
+}
 
 function promptCoachHint(input: {
   hasFirstFrame: boolean
@@ -84,21 +96,6 @@ function randomSeed() {
   return Math.floor(Math.random() * 1_000_000_000)
 }
 
-function MetaBits({ items }: { items: string[] }) {
-  return (
-    <span className="flex flex-wrap items-center gap-2 font-mono text-[11px] tabular-nums tracking-tight text-muted-foreground">
-      {items.map((item, index) => (
-        <span key={`${item}-${index}`} className="flex items-center gap-2">
-          {index > 0 ? (
-            <span className="h-3 w-px bg-border" aria-hidden="true" />
-          ) : null}
-          {item}
-        </span>
-      ))}
-    </span>
-  )
-}
-
 function groupWorkflows(items: WorkflowListItem[]) {
   return {
     official: items.filter((item) => item.family === "official"),
@@ -108,6 +105,8 @@ function groupWorkflows(items: WorkflowListItem[]) {
   }
 }
 
+type Shell = "home" | "short" | "long"
+
 export function StudioApp() {
   const [health, setHealth] = useState<HealthStatus | null>(null)
   const [port, setPort] = useState(8188)
@@ -116,16 +115,17 @@ export function StudioApp() {
   const [workflowName, setWorkflowName] = useState("")
   const [bundle, setBundle] = useState<WorkflowBundle | null>(null)
   const [jobs, setJobs] = useState<PublicJob[]>([])
+  const [queue, setQueue] = useState<StudioQueueSnapshot>(emptyQueue)
   const [current, setCurrent] = useState<PublicJob | null>(null)
   const [settingsOpen, setSettingsOpen] = useState(false)
-  const [busyOpen, setBusyOpen] = useState(false)
+  const [focusEnvironment, setFocusEnvironment] = useState(false)
   const [submitting, setSubmitting] = useState(false)
-  const [composeOpen, setComposeOpen] = useState(false)
-  const [composeMode, setComposeMode] = useState<"new" | "detail">("new")
-  const [composeJobId, setComposeJobId] = useState<string | null>(null)
-  const [deleteTarget, setDeleteTarget] = useState<PublicJob | null>(null)
+  const [shell, setShell] = useState<Shell>("home")
+  const [workspaceJobId, setWorkspaceJobId] = useState<string | null>(null)
+  const [deleteTargets, setDeleteTargets] = useState<PublicJob[]>([])
   const [guideOpen, setGuideOpen] = useState(false)
   const [guidePinned, setGuidePinned] = useState(false)
+  const [monitorMode, setMonitorMode] = useState<MonitorMode>("current")
 
   const [prompt, setPrompt] = useState("")
   const [duration, setDuration] = useState("5")
@@ -140,9 +140,22 @@ export function StudioApp() {
   const [refDrafts, setRefDrafts] = useState<RefDraft[]>([])
   const eventSourceRef = useRef<EventSource | null>(null)
   const textareaRef = useRef<HTMLTextAreaElement>(null)
+  const monitorRef = useRef<HTMLElement | null>(null)
 
   const connected = Boolean(health?.ok)
   const busy = Boolean(current && isBusyJob(current))
+  const environmentLine: EnvironmentLine =
+    shell === "long" ? "long" : workflowEnvironmentLine(workflowName)
+
+  async function ensureEnvironment(line: EnvironmentLine) {
+    const response = await fetch(`/api/environment?line=${encodeURIComponent(line)}`)
+    const json = (await response.json()) as EnvironmentStatus
+    if (json.ready) return true
+    setFocusEnvironment(true)
+    setSettingsOpen(true)
+    toast.error(json.summary)
+    return false
+  }
 
   const loadHealth = useCallback(async () => {
     const response = await fetch("/api/health")
@@ -177,9 +190,10 @@ export function StudioApp() {
         family: "custom" as const,
         bundled: false,
         overridden: false,
+        picker: true,
       }))
     setWorkflows(list)
-    const names = list.map((item) => item.name)
+    const names = list.filter((item) => item.picker !== false).map((item) => item.name)
     const resolveName = (name?: string | null) => {
       if (!name) return name
       const aliased = WORKFLOW_ALIASES[name]
@@ -249,19 +263,40 @@ export function StudioApp() {
     source.onmessage = (event) => {
       const payload = JSON.parse(event.data) as { job: PublicJob | null }
       if (!payload.job) return
-      setCurrent((prev) => (prev?.id === payload.job!.id ? payload.job! : prev))
+      const next = payload.job
+      setCurrent((prev) => (prev?.id === next.id ? next : prev))
       setJobs((list) => {
-        const rest = list.filter((item) => item.id !== payload.job!.id)
-        return [payload.job!, ...rest]
+        const rest = list.filter((item) => item.id !== next.id)
+        return [next, ...rest]
       })
       if (
-        payload.job.status === "success" ||
-        payload.job.status === "error" ||
-        payload.job.status === "interrupted"
+        next.status === "success" ||
+        next.status === "error" ||
+        next.status === "interrupted" ||
+        next.status === "awaiting"
       ) {
         source.close()
-        if (payload.job.status === "success") toast.success("成片已写入 Studio 输出目录")
-        if (payload.job.status === "error") toast.error(payload.job.error ?? "生成失败")
+        if (next.kind === "long") {
+          const last = next.long?.segments[next.long.segments.length - 1]
+          if (next.status === "awaiting" && last?.status === "success") {
+            toast.success(`第 ${last.index} 段已写入`)
+          } else if (next.status === "awaiting" && last?.status === "interrupted") {
+            toast.message("已中断本段，可重试")
+          } else if (next.status === "success") {
+            toast.success("长视频已定稿")
+          } else if (next.status === "error") {
+            toast.error(next.error ?? "这一段失败")
+          }
+        } else {
+          if (next.status === "success") toast.success("成片已写入 Studio 输出目录")
+          if (next.status === "error") toast.error(next.error ?? "生成失败")
+        }
+        void fetch("/api/jobs")
+          .then((response) => response.json())
+          .then((json: { jobs?: PublicJob[]; queue?: StudioQueueSnapshot }) => {
+            if (json.jobs) setJobs(json.jobs)
+            if (json.queue) setQueue(json.queue)
+          })
       }
     }
     source.onerror = () => {
@@ -271,15 +306,14 @@ export function StudioApp() {
 
   const loadJobs = useCallback(async () => {
     const response = await fetch("/api/jobs")
-    const json = (await response.json()) as { jobs: PublicJob[] }
-    setJobs(json.jobs)
-    const active = json.jobs.find(isBusyJob)
-    if (active) {
-      setCurrent(active)
-      listenJob(active.id)
+    const json = (await response.json()) as {
+      jobs: PublicJob[]
+      queue?: StudioQueueSnapshot
     }
+    setJobs(json.jobs)
+    if (json.queue) setQueue(json.queue)
     return json.jobs
-  }, [listenJob])
+  }, [])
 
   useEffect(() => {
     void (async () => {
@@ -294,6 +328,7 @@ export function StudioApp() {
     })()
     const timer = setInterval(() => {
       void loadHealth()
+      void loadJobs()
     }, 4000)
     return () => {
       clearInterval(timer)
@@ -336,8 +371,8 @@ export function StudioApp() {
 
   function removeRefDraft(id: string) {
     setRefDrafts((previous) => {
-      const current = previous.find((item) => item.id === id)
-      if (current) URL.revokeObjectURL(current.preview)
+      const currentDraft = previous.find((item) => item.id === id)
+      if (currentDraft) URL.revokeObjectURL(currentDraft.preview)
       return previous.filter((item) => item.id !== id)
     })
   }
@@ -350,7 +385,26 @@ export function StudioApp() {
     )
   }, [busy, current])
 
-  async function submit(ignoreBusy = false) {
+  function goHome() {
+    setShell("home")
+    setGuideOpen(false)
+    setGuidePinned(false)
+    setWorkspaceJobId(null)
+    setMonitorMode("current")
+  }
+
+  function enterWorkspace(next: Shell, job: PublicJob | null) {
+    setShell(next)
+    setWorkspaceJobId(job?.id ?? null)
+    setCurrent(job)
+    setMonitorMode("current")
+    setGuideOpen(false)
+    setGuidePinned(false)
+    if (next === "long") setPrompt("")
+    if (job && (isBusyJob(job) || isWaitingJob(job))) listenJob(job.id)
+  }
+
+  async function submitShort() {
     if (!workflowName) {
       toast.error("请先导入工作流")
       return
@@ -359,6 +413,11 @@ export function StudioApp() {
       toast.error("请填写提示词")
       return
     }
+    if (!(await ensureEnvironment(environmentLine))) return
+    const watching = workspaceJobId
+      ? (jobs.find((item) => item.id === workspaceJobId) ?? current)
+      : current
+    const stayOnMonitor = Boolean(watching && isBusyJob(watching))
     setSubmitting(true)
     try {
       const form = new FormData()
@@ -368,7 +427,6 @@ export function StudioApp() {
       form.set("aspect", aspect)
       form.set("seed", String(randomize ? randomSeed() : seed))
       form.set("loras", JSON.stringify(loras))
-      form.set("ignoreBusy", ignoreBusy ? "true" : "false")
       if (steps && bundle?.mapping.steps) form.set("steps", steps)
       if (cfg && bundle?.mapping.cfg) form.set("cfg", cfg)
       for (const [slotId, item] of Object.entries(slotFiles)) {
@@ -384,11 +442,62 @@ export function StudioApp() {
       const response = await fetch("/api/jobs", { method: "POST", body: form })
       const json = (await response.json()) as {
         job?: PublicJob
+        queue?: StudioQueueSnapshot
         error?: string
         code?: string
       }
-      if (response.status === 409 && json.code === "comfy_busy") {
-        setBusyOpen(true)
+      if (response.status === 412 && json.code === "environment_incomplete") {
+        setFocusEnvironment(true)
+        setSettingsOpen(true)
+        toast.error(json.error ?? "环境还没就绪")
+        return
+      }
+      if (!response.ok || !json.job) {
+        toast.error(json.error ?? "提交失败")
+        if (json.job) {
+          setJobs((list) => [json.job!, ...list.filter((item) => item.id !== json.job!.id)])
+        }
+        return
+      }
+      if (json.queue) setQueue(json.queue)
+      setJobs((list) => [json.job!, ...list.filter((item) => item.id !== json.job!.id)])
+      if (json.job.status === "waiting") {
+        const ahead = json.queue?.items.findIndex((item) => item.jobId === json.job!.id) ?? -1
+        toast.message(
+          ahead > 0 ? `已排队，前面还有 ${ahead} 条` : "已排队，轮到就会开跑"
+        )
+      }
+      if (!stayOnMonitor) {
+        setCurrent(json.job)
+        setWorkspaceJobId(json.job.id)
+        listenJob(json.job.id)
+      }
+    } finally {
+      setSubmitting(false)
+    }
+  }
+
+  async function submitLong(payload: LongGeneratePayload) {
+    if (!current || current.kind !== "long") return
+    if (!(await ensureEnvironment("long"))) return
+    setSubmitting(true)
+    try {
+      const response = await fetch(`/api/jobs/${current.id}/segments`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(payload),
+      })
+      const json = (await response.json()) as {
+        job?: PublicJob
+        queue?: StudioQueueSnapshot
+        error?: string
+        code?: string
+        installUrl?: string
+      }
+      if (response.status === 412 && json.code === "environment_incomplete") {
+        setFocusEnvironment(true)
+        setSettingsOpen(true)
+        toast.error(json.error ?? "环境还没就绪")
         return
       }
       if (!response.ok || !json.job) {
@@ -399,10 +508,16 @@ export function StudioApp() {
         }
         return
       }
+      if (json.queue) setQueue(json.queue)
       setCurrent(json.job)
       setJobs((list) => [json.job!, ...list.filter((item) => item.id !== json.job!.id)])
+      if (json.job.status === "waiting") {
+        const ahead = json.queue?.items.findIndex((item) => item.jobId === json.job!.id) ?? -1
+        toast.message(
+          ahead > 0 ? `已排队，前面还有 ${ahead} 条` : "已排队，轮到就会开跑"
+        )
+      }
       listenJob(json.job.id)
-      setComposeOpen(false)
     } finally {
       setSubmitting(false)
     }
@@ -422,26 +537,40 @@ export function StudioApp() {
     }
   }
 
-  async function openNew() {
+  async function openNewShort() {
     if (!workflowName) {
       toast.error("请先导入工作流")
       return
     }
-    setComposeMode("new")
-    setComposeJobId(null)
     await loadBundle(workflowName)
     setPrompt("")
     setRandomize(true)
-    setComposeOpen(true)
+    enterWorkspace("short", null)
   }
 
-  async function openDetail(job: PublicJob) {
+  async function openNewLong() {
+    const form = new FormData()
+    form.set("kind", "long")
+    form.set("aspect", aspect)
+    const response = await fetch("/api/jobs", { method: "POST", body: form })
+    const json = (await response.json()) as { job?: PublicJob; error?: string }
+    if (!response.ok || !json.job) {
+      toast.error(json.error ?? "无法创建长视频任务")
+      return
+    }
+    setJobs((list) => [json.job!, ...list.filter((item) => item.id !== json.job!.id)])
+    enterWorkspace("long", json.job)
+  }
+
+  async function openJob(job: PublicJob) {
+    if (isLongJob(job)) {
+      enterWorkspace("long", job)
+      if (isBusyJob(job) || isWaitingJob(job)) listenJob(job.id)
+      return
+    }
     const name = job.workflowFile
       ? (WORKFLOW_ALIASES[job.workflowFile] ?? job.workflowFile)
       : workflowName
-    setComposeMode("detail")
-    setComposeJobId(job.id)
-    setCurrent(job)
     if (name && name !== workflowName) {
       await loadBundle(name, { keepValues: true })
     }
@@ -458,23 +587,142 @@ export function StudioApp() {
       }
       return []
     })
-    setComposeOpen(true)
+    enterWorkspace("short", job)
+    if (isBusyJob(job) || isWaitingJob(job)) listenJob(job.id)
   }
 
   async function deleteJob(job: PublicJob) {
     const response = await fetch(`/api/jobs/${job.id}`, { method: "DELETE" })
-    const json = (await response.json()) as { deleted?: boolean; error?: string }
+    const json = (await response.json()) as {
+      deleted?: boolean
+      job?: PublicJob
+      error?: string
+    }
+    if (json.job && isBusyJob(job)) {
+      setCurrent((prev) => (prev?.id === json.job!.id ? json.job! : prev))
+      setJobs((list) => [json.job!, ...list.filter((item) => item.id !== json.job!.id)])
+      return
+    }
     if (!response.ok || !json.deleted) {
       toast.error(json.error ?? "删除失败")
       return
     }
     setJobs((list) => list.filter((item) => item.id !== job.id))
     if (current?.id === job.id) setCurrent(null)
-    if (composeJobId === job.id) {
-      setComposeOpen(false)
-      setComposeJobId(null)
-    }
+    if (workspaceJobId === job.id) goHome()
     toast.success("已删除任务")
+  }
+
+  async function deleteJobs(targets: PublicJob[]) {
+    const ids = targets.map((item) => item.id)
+    const response = await fetch("/api/jobs", {
+      method: "DELETE",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ ids }),
+    })
+    const json = (await response.json()) as {
+      deleted?: string[]
+      skipped?: string[]
+      error?: string
+    }
+    if (!response.ok) {
+      toast.error(json.error ?? "删除失败")
+      return
+    }
+    const deleted = new Set(json.deleted ?? [])
+    setJobs((list) => list.filter((item) => !deleted.has(item.id)))
+    if (current && deleted.has(current.id)) setCurrent(null)
+    if (workspaceJobId && deleted.has(workspaceJobId)) goHome()
+    const skipped = json.skipped?.length ?? 0
+    if (skipped > 0) {
+      toast.success(`已删除 ${deleted.size} 条，跳过 ${skipped} 条进行中的任务`)
+    } else {
+      toast.success(deleted.size > 1 ? `已删除 ${deleted.size} 条任务` : "已删除任务")
+    }
+  }
+
+  async function finalizeLong(finalized: boolean) {
+    if (!current) return
+    const response = await fetch(`/api/jobs/${current.id}/finalize`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ finalized }),
+    })
+    const json = (await response.json()) as { job?: PublicJob; error?: string }
+    if (!response.ok || !json.job) {
+      toast.error(json.error ?? "操作失败")
+      return
+    }
+    setCurrent(json.job)
+    setJobs((list) => [json.job!, ...list.filter((item) => item.id !== json.job!.id)])
+    toast.success(finalized ? "已定稿" : "已撤销定稿，可继续")
+  }
+
+  async function retryStitch() {
+    if (!current) return
+    const response = await fetch(`/api/jobs/${current.id}/stitch`, { method: "POST" })
+    const json = (await response.json()) as { job?: PublicJob; error?: string }
+    if (!response.ok || !json.job) {
+      toast.error(json.error ?? "拼接失败")
+      if (json.job) {
+        setCurrent(json.job)
+        setJobs((list) => [json.job!, ...list.filter((item) => item.id !== json.job!.id)])
+      }
+      return
+    }
+    setCurrent(json.job)
+    setJobs((list) => [json.job!, ...list.filter((item) => item.id !== json.job!.id)])
+    toast.success("已重新拼接")
+  }
+
+  async function resumeQueue() {
+    const response = await fetch("/api/queue", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ action: "resume" }),
+    })
+    const json = (await response.json()) as {
+      queue?: StudioQueueSnapshot
+      error?: string
+    }
+    if (!response.ok) {
+      toast.error(json.error ?? "无法继续队列")
+      return
+    }
+    if (json.queue) setQueue(json.queue)
+    await loadJobs()
+    toast.message("队列已继续")
+  }
+
+  async function withdrawQueueItem(job: PublicJob) {
+    const response = await fetch("/api/queue", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ action: "withdraw", jobId: job.id }),
+    })
+    const json = (await response.json()) as {
+      withdrawn?: string
+      job?: PublicJob
+      queue?: StudioQueueSnapshot
+      error?: string
+    }
+    if (!response.ok) {
+      toast.error(json.error ?? "无法从队列撤下")
+      return
+    }
+    if (json.queue) setQueue(json.queue)
+    if (json.withdrawn === "job") {
+      setJobs((list) => list.filter((item) => item.id !== job.id))
+      if (current?.id === job.id) setCurrent(null)
+      if (workspaceJobId === job.id) goHome()
+      toast.success("已从队列删除")
+      return
+    }
+    if (json.job) {
+      setCurrent((prev) => (prev?.id === json.job!.id ? json.job! : prev))
+      setJobs((list) => [json.job!, ...list.filter((item) => item.id !== json.job!.id)])
+    }
+    toast.success("已从队列撤下，回到待续")
   }
 
   const mappingHints = bundle
@@ -514,23 +762,60 @@ export function StudioApp() {
     dynamicRefs,
     durationSeconds,
   })
+  const pickerWorkflows = workflows.filter((item) => item.picker !== false)
   const hasSteps = Boolean(bundle?.mapping.steps)
   const hasCfg = Boolean(bundle?.mapping.cfg)
-  const grouped = groupWorkflows(workflows)
+  const grouped = groupWorkflows(pickerWorkflows)
   const currentWorkflow = workflows.find((item) => item.name === workflowName)
-  const activeJob = jobs.find(isBusyJob)
-  const composeJob = composeJobId
-    ? jobs.find((item) => item.id === composeJobId)
-    : undefined
-  const composeReadOnly = Boolean(composeMode === "detail" && composeJob && isBusyJob(composeJob))
-  const composeTitle = composeMode === "detail" ? "任务详情" : "新建任务"
-  const composeHint = composeReadOnly
-    ? "进行中不能改参数。要中断请先关掉，到监视器操作。"
-    : composeMode === "detail"
-      ? "会新开一条任务，不会改列表里这条。"
-      : "生成后会出现在左侧任务列表。"
-  const generateLabel = submitting ? "提交中" : "生成"
-  const generateDisabled = composeReadOnly || submitting || !workflowName
+  const workspaceJob = workspaceJobId
+    ? jobs.find((item) => item.id === workspaceJobId) ?? current
+    : current
+  const shortReadOnly = Boolean(
+    shell === "short" && workspaceJob && isWaitingJob(workspaceJob)
+  )
+  const generateDisabled = shortReadOnly || submitting || !workflowName
+  const inWorkspace = shell !== "home"
+  const liveJob = workspaceJobId
+    ? jobs.find((item) => item.id === workspaceJobId) ?? current
+    : current
+
+  const guideBusy = Boolean(liveJob && isBusyJob(liveJob))
+  const guide = (
+    <PromptGuide
+      open={inWorkspace && (guideOpen || guidePinned)}
+      pinned={guidePinned}
+      compact={guideBusy}
+      mode={shell === "long" ? "t2v" : guideMode}
+      duration={durationSeconds}
+      prompt={prompt}
+      textareaRef={textareaRef}
+      monitorRef={monitorRef}
+      disabled={shell === "short" ? shortReadOnly : guideBusy}
+      extraRules={
+        shell === "long"
+          ? ["下一段先用大约 2 秒接住上一镜的结尾，再开新动作（气闸）。"]
+          : undefined
+      }
+      onPinnedChange={(next) => {
+        setGuidePinned(next)
+        if (next) setGuideOpen(true)
+        else if (document.activeElement !== textareaRef.current) {
+          setGuideOpen(false)
+        }
+      }}
+      onClose={() => setGuideOpen(false)}
+      onApply={(next, selection) => {
+        setPrompt(next)
+        setGuideOpen(true)
+        requestAnimationFrame(() => {
+          const el = textareaRef.current
+          if (!el) return
+          el.focus()
+          el.setSelectionRange(selection.start, selection.end)
+        })
+      }}
+    />
+  )
 
   return (
     <div className="flex min-h-[100dvh] flex-col">
@@ -567,19 +852,24 @@ export function StudioApp() {
               ComfyUI
             </a>
           </Button>
-          <Button type="button" size="sm" variant="outline" onClick={() => setSettingsOpen(true)}>
+          <Button
+            type="button"
+            size="sm"
+            variant="outline"
+            onClick={() => {
+              setFocusEnvironment(false)
+              setSettingsOpen(true)
+            }}
+          >
             <Settings2Icon data-icon="inline-start" />
             设置
           </Button>
         </div>
       </header>
 
-      <div
-        id="studio-main"
-        className="grid flex-1 grid-cols-1 lg:grid-cols-[minmax(20rem,24rem)_minmax(0,1fr)]"
-      >
-        <section className="relative flex min-h-0 flex-col border-b lg:max-h-[calc(100dvh-3.75rem)] lg:border-r lg:border-b-0">
-          <div className="flex shrink-0 flex-col gap-3 border-b p-4">
+      {shell === "home" ? (
+        <div id="studio-main" className="flex flex-1 flex-col">
+          <section className="mx-auto flex w-full max-w-3xl flex-1 flex-col gap-4 p-4">
             {!connected ? (
               <Alert>
                 <AlertTitle>还没有连上 ComfyUI</AlertTitle>
@@ -601,241 +891,247 @@ export function StudioApp() {
                   </EmptyDescription>
                 </EmptyHeader>
                 <EmptyContent>
-                  <Button type="button" onClick={() => setSettingsOpen(true)}>
+                  <Button
+                    type="button"
+                    onClick={() => {
+                      setFocusEnvironment(false)
+                      setSettingsOpen(true)
+                    }}
+                  >
                     打开设置
                   </Button>
                 </EmptyContent>
               </Empty>
             ) : (
-              <Button type="button" size="lg" className="h-11 w-full" onClick={() => void openNew()}>
-                <PlusIcon data-icon="inline-start" />
-                新建
-              </Button>
+              <div className="grid grid-cols-1 gap-2 sm:grid-cols-2">
+                <Button
+                  type="button"
+                  size="lg"
+                  className="h-11 w-full"
+                  onClick={() => void openNewShort()}
+                >
+                  <PlusIcon data-icon="inline-start" />
+                  新建短片
+                </Button>
+                <Button
+                  type="button"
+                  size="lg"
+                  variant="outline"
+                  className="h-11 w-full"
+                  onClick={() => void openNewLong()}
+                >
+                  <PlusIcon data-icon="inline-start" />
+                  新建长视频
+                </Button>
+              </div>
             )}
-          </div>
-          {workflows.length > 0 ? (
-            <div className="min-h-0 flex-1 overflow-y-auto p-3">
-              <TaskList
-                jobs={jobs}
-                currentId={current?.id}
-                onSelect={setCurrent}
-                onOpenDetail={(job) => void openDetail(job)}
-                onDelete={setDeleteTarget}
-              />
+            <div className="min-h-0 flex-1 overflow-y-auto">
+              <div className="flex flex-col gap-4">
+                <QueuePanel
+                  queue={queue}
+                  jobs={jobs}
+                  onOpen={(job) => void openJob(job)}
+                  onResume={() => void resumeQueue()}
+                  onWithdraw={(job) => void withdrawQueueItem(job)}
+                />
+                <TaskList
+                  jobs={jobs}
+                  currentId={current?.id}
+                  onSelect={(job) => void openJob(job)}
+                  onDelete={(job) => setDeleteTargets([job])}
+                  onDeleteMany={setDeleteTargets}
+                />
+              </div>
             </div>
-          ) : null}
-        </section>
-
-        <section
-          className="flex min-h-0 flex-col gap-4 p-4 lg:max-h-[calc(100dvh-3.75rem)] lg:overflow-hidden"
+          </section>
+        </div>
+      ) : (
+        <div
+          id="studio-main"
+          className="grid flex-1 grid-cols-1 lg:grid-cols-[minmax(22rem,28rem)_minmax(0,1fr)]"
         >
-          <div className="flex min-h-72 flex-1 flex-col overflow-hidden rounded-xl border bg-card">
-            <div className="flex items-center justify-between gap-3 border-b px-4 py-2.5">
-              <span className="text-sm font-medium">成片</span>
-              <div className="flex min-w-0 items-center gap-2">
-                {current ? (
-                  <MetaBits
-                    items={[
-                      statusLabel(current),
-                      `${current.duration}s`,
-                      current.aspect,
-                      `seed ${current.seed}`,
-                    ]}
+          <section className="relative flex min-h-0 flex-col border-b lg:max-h-[calc(100dvh-3.75rem)] lg:border-r lg:border-b-0">
+            <div className="flex shrink-0 items-center gap-2 border-b px-3 py-2">
+              <Button type="button" size="sm" variant="ghost" onClick={goHome}>
+                <ArrowLeftIcon data-icon="inline-start" />
+                返回列表
+              </Button>
+              {shell === "long" ? (
+                <Badge className="h-6 gap-1 rounded-md px-2.5 font-medium">
+                  <ClapperboardIcon data-icon="inline-start" />
+                  长视频
+                </Badge>
+              ) : (
+                <Badge
+                  variant={workspaceJobId ? "secondary" : "outline"}
+                  className="h-6 gap-1 rounded-md px-2.5 font-medium"
+                >
+                  <FilmIcon data-icon="inline-start" />
+                  {workspaceJobId ? "短片" : "新建短片"}
+                </Badge>
+              )}
+              {queue.remaining > 0 ? (
+                <span className="font-mono text-[11px] tabular-nums text-muted-foreground">
+                  队列还剩 {queue.remaining}
+                </span>
+              ) : null}
+              {queue.paused &&
+              queue.remaining > 0 &&
+              liveJob &&
+              (isWaitingJob(liveJob) || waitingSegment(liveJob.long)) ? (
+                <Button type="button" size="sm" onClick={() => void resumeQueue()}>
+                  继续队列（{queue.remaining}）
+                </Button>
+              ) : null}
+              {liveJob && (isWaitingJob(liveJob) || waitingSegment(liveJob.long)) ? (
+                <Button
+                  type="button"
+                  size="sm"
+                  variant="outline"
+                  onClick={() => void withdrawQueueItem(liveJob)}
+                >
+                  {isLongJob(liveJob) ? "从队列撤下" : "从队列删除"}
+                </Button>
+              ) : null}
+            </div>
+            <div className="flex min-h-0 flex-1 overflow-hidden p-3">
+              <div className="flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden rounded-xl border bg-card">
+                {shell === "long" && liveJob && isLongJob(liveJob) ? (
+                  <LongWorkspace
+                    job={liveJob}
+                    submitting={submitting}
+                    prompt={prompt}
+                    textareaRef={textareaRef}
+                    onPromptChange={setPrompt}
+                    onPromptFocus={() => setGuideOpen(true)}
+                    onGenerate={(payload) => void submitLong(payload)}
+                    onFinalize={() => void finalizeLong(true)}
+                    onReopen={() => void finalizeLong(false)}
                   />
                 ) : (
-                  <span className="font-mono text-[11px] tabular-nums text-muted-foreground">
-                    {aspect} {duration}s
-                  </span>
+                  <>
+                    <div className="min-h-0 flex-1 overflow-y-auto px-4 py-4">
+                      <ComposeForm
+                        readOnly={shortReadOnly}
+                        workflows={pickerWorkflows}
+                        workflowName={workflowName}
+                        grouped={grouped}
+                        currentWorkflow={currentWorkflow}
+                        mappingHints={mappingHints}
+                        prompt={prompt}
+                        promptHint={promptHint}
+                        textareaRef={textareaRef}
+                        duration={duration}
+                        aspect={aspect}
+                        seed={seed}
+                        randomize={randomize}
+                        steps={steps}
+                        cfg={cfg}
+                        loras={loras}
+                        loraFiles={loraFiles}
+                        hasSteps={hasSteps}
+                        hasCfg={hasCfg}
+                        mediaSlots={mediaSlots}
+                        slotFiles={slotFiles}
+                        dynamicRefs={dynamicRefs}
+                        refDrafts={refDrafts}
+                        onWorkflowChange={(name) => {
+                          setWorkflowName(name)
+                          void loadBundle(name)
+                        }}
+                        onPromptChange={setPrompt}
+                        onPromptFocus={() => setGuideOpen(true)}
+                        onDurationChange={setDuration}
+                        onAspectChange={setAspect}
+                        onSeedChange={setSeed}
+                        onRandomizeChange={setRandomize}
+                        onStepsChange={setSteps}
+                        onCfgChange={setCfg}
+                        onLorasChange={setLoras}
+                        onSlotFile={setSlotFile}
+                        onAddRefs={addRefFiles}
+                        onRemoveRef={removeRefDraft}
+                      />
+                    </div>
+                    <div className="flex shrink-0 flex-col gap-3 border-t px-4 py-3">
+                      <p className="text-xs leading-relaxed text-muted-foreground text-pretty">
+                        {shortReadOnly
+                          ? "这条还在队列里，不能改。要从队列撤下后才能改词。"
+                          : workspaceJob && isBusyJob(workspaceJob)
+                            ? "监视器看着这条。再点生成会排到队列后面，不会改正在跑的。"
+                            : workspaceJobId
+                              ? "会新开一条短片，不会改列表里这条。"
+                              : "生成后会出现在任务列表。"}
+                      </p>
+                      <Button
+                        type="button"
+                        size="lg"
+                        className="h-11 w-full"
+                        disabled={generateDisabled}
+                        onClick={() => void submitShort()}
+                      >
+                        {submitting ? (
+                          <Spinner data-icon="inline-start" />
+                        ) : (
+                          <PlayIcon data-icon="inline-start" />
+                        )}
+                        {submitting ? "提交中" : "生成"}
+                      </Button>
+                    </div>
+                  </>
                 )}
-                {activeJob ? (
-                  <Button
-                    type="button"
-                    size="sm"
-                    variant="outline"
-                    onClick={() => {
-                      void fetch(`/api/jobs/${activeJob.id}`, { method: "DELETE" })
-                    }}
-                  >
-                    <SquareIcon data-icon="inline-start" />
-                    中断
-                  </Button>
-                ) : null}
               </div>
             </div>
-            <div
-              className={cn(
-                "relative flex min-h-64 flex-1 items-center justify-center studio-letterbox",
-                busy && "studio-scan"
-              )}
-              aria-live="polite"
-            >
-              {current?.outputUrl && current.status === "success" ? (
-                <video
-                  key={current.outputUrl}
-                  className="max-h-[min(32rem,55dvh)] w-full object-contain"
-                  src={current.outputUrl}
-                  controls
-                  autoPlay
-                />
-              ) : busy ? (
-                <div className="relative z-10 flex w-full max-w-md flex-col items-center gap-4 p-8">
-                  <p className="text-sm text-muted-foreground">
-                    {current?.progress?.nodeTitle ||
-                      (current?.progress?.node
-                        ? `节点 ${current.progress.node}`
-                        : "已提交，等待 ComfyUI")}
-                  </p>
-                  <Progress value={progressPercent} className="w-full" />
-                  <p className="font-mono text-xs tabular-nums text-muted-foreground">
-                    {current?.progress?.max
-                      ? `${current.progress.value} / ${current.progress.max}`
-                      : "排队或加载模型中"}
-                  </p>
-                </div>
-              ) : current?.status === "error" ? (
-                <div className="w-full max-w-lg p-6">
-                  <Alert variant="destructive">
-                    <AlertTitle>生成失败</AlertTitle>
-                    <AlertDescription>{current.error}</AlertDescription>
-                  </Alert>
-                </div>
-              ) : (
-                <div
-                  className="flex w-full max-w-xl flex-col items-center justify-center gap-3 border border-dashed border-border/70 p-8 text-center"
-                  style={{ aspectRatio: aspect.replace(":", " / ") }}
-                >
-                  <p className="text-sm font-medium">还没有成片</p>
-                  <p className="max-w-[36ch] text-sm leading-relaxed text-muted-foreground text-pretty">
-                    点左侧新建，写好提示词后生成。进度走 ComfyUI 的 websocket，成片会复制到
-                    outputs/ 目录。
-                  </p>
-                </div>
-              )}
-            </div>
-            {current ? (
-              <div className="flex flex-wrap items-center gap-2 border-t px-4 py-2.5">
-                <span className="truncate font-mono text-[11px] text-muted-foreground">
-                  {current.workflowFile}
-                </span>
-                <div className="ml-auto flex gap-2">
-                  {current.outputUrl ? (
-                    <Button size="sm" variant="outline" asChild>
-                      <a href={current.outputUrl} download>
-                        <DownloadIcon data-icon="inline-start" />
-                        下载成片
-                      </a>
-                    </Button>
-                  ) : null}
-                  <Button size="sm" variant="ghost" asChild>
-                    <a href={current.workflowUrl} download>
-                      本次 JSON
-                    </a>
-                  </Button>
-                </div>
-              </div>
-            ) : null}
-          </div>
-        </section>
-      </div>
+          </section>
 
-      <ComposeDialog
-        open={composeOpen}
-        title={composeTitle}
-        hint={composeHint}
-        generateDisabled={generateDisabled}
-        generateLabel={generateLabel}
-        submitting={submitting}
-        onOpenChange={(open) => {
-          setComposeOpen(open)
-          if (!open) {
-            setGuideOpen(false)
-            setGuidePinned(false)
-          }
-        }}
-        onGenerate={() => void submit(false)}
-        guide={
-          <PromptGuide
-            docked
-            open={composeOpen && (guideOpen || guidePinned)}
-            pinned={guidePinned}
-            mode={guideMode}
-            duration={durationSeconds}
-            prompt={prompt}
-            textareaRef={textareaRef}
-            disabled={composeReadOnly}
-            onPinnedChange={(next) => {
-              setGuidePinned(next)
-              if (next) setGuideOpen(true)
-              else if (document.activeElement !== textareaRef.current) {
-                setGuideOpen(false)
+          <section
+            ref={(node) => {
+              monitorRef.current = node
+            }}
+            className="flex min-h-0 flex-col gap-4 p-4 lg:max-h-[calc(100dvh-3.75rem)] lg:overflow-hidden"
+          >
+            <MonitorPanel
+              job={liveJob}
+              busy={Boolean(liveJob && isBusyJob(liveJob))}
+              progressPercent={progressPercent}
+              aspect={liveJob?.aspect ?? aspect}
+              duration={liveJob ? String(liveJob.duration) : duration}
+              mode={monitorMode}
+              onModeChange={setMonitorMode}
+              onInterrupt={
+                liveJob && isBusyJob(liveJob)
+                  ? () => {
+                      void fetch(`/api/jobs/${liveJob.id}`, { method: "DELETE" })
+                    }
+                  : undefined
               }
-            }}
-            onClose={() => setGuideOpen(false)}
-            onApply={(next, selection) => {
-              setPrompt(next)
-              setGuideOpen(true)
-              requestAnimationFrame(() => {
-                const el = textareaRef.current
-                if (!el) return
-                el.focus()
-                el.setSelectionRange(selection.start, selection.end)
-              })
-            }}
-          />
-        }
-      >
-        <ComposeForm
-          readOnly={composeReadOnly}
-          workflows={workflows}
-          workflowName={workflowName}
-          grouped={grouped}
-          currentWorkflow={currentWorkflow}
-          mappingHints={mappingHints}
-          prompt={prompt}
-          promptHint={promptHint}
-          textareaRef={textareaRef}
-          duration={duration}
-          aspect={aspect}
-          seed={seed}
-          randomize={randomize}
-          steps={steps}
-          cfg={cfg}
-          loras={loras}
-          loraFiles={loraFiles}
-          hasSteps={hasSteps}
-          hasCfg={hasCfg}
-          mediaSlots={mediaSlots}
-          slotFiles={slotFiles}
-          dynamicRefs={dynamicRefs}
-          refDrafts={refDrafts}
-          onWorkflowChange={(name) => {
-            setWorkflowName(name)
-            void loadBundle(name)
-          }}
-          onPromptChange={setPrompt}
-          onPromptFocus={() => setGuideOpen(true)}
-          onDurationChange={setDuration}
-          onAspectChange={setAspect}
-          onSeedChange={setSeed}
-          onRandomizeChange={setRandomize}
-          onStepsChange={setSteps}
-          onCfgChange={setCfg}
-          onLorasChange={setLoras}
-          onSlotFile={setSlotFile}
-          onAddRefs={addRefFiles}
-          onRemoveRef={removeRefDraft}
-        />
-      </ComposeDialog>
+              onRetryStitch={() => void retryStitch()}
+              emptyHint={
+                shell === "long"
+                  ? "写好这一段后生成。监视器默认看当前段，也可切到已拼接。"
+                  : "写好提示词后生成。进度走 ComfyUI 的 websocket，成片会复制到 outputs/ 目录。"
+              }
+            />
+          </section>
+        </div>
+      )}
+
+      {guide}
 
       <SettingsDialog
         open={settingsOpen}
-        onOpenChange={setSettingsOpen}
+        onOpenChange={(open) => {
+          setSettingsOpen(open)
+          if (!open) setFocusEnvironment(false)
+        }}
         port={port}
         comfyUrl={comfyUrl}
         connected={connected}
         workflowName={workflowName}
         workflows={workflows}
         bundle={bundle}
+        environmentLine={environmentLine}
+        focusEnvironment={focusEnvironment}
         onPortChange={async (nextPort) => {
           const response = await fetch("/api/settings", {
             method: "PUT",
@@ -872,39 +1168,21 @@ export function StudioApp() {
         onMappingSaved={(next) => setBundle(next)}
       />
 
-      <AlertDialog open={busyOpen} onOpenChange={setBusyOpen}>
-        <AlertDialogContent>
-          <AlertDialogHeader>
-            <AlertDialogTitle>ComfyUI 正在忙</AlertDialogTitle>
-            <AlertDialogDescription>
-              队列里已有任务。仍要继续提交的话，Studio 会把这一条排到后面。
-            </AlertDialogDescription>
-          </AlertDialogHeader>
-          <AlertDialogFooter>
-            <AlertDialogCancel>取消</AlertDialogCancel>
-            <AlertDialogAction
-              onClick={() => {
-                setBusyOpen(false)
-                void submit(true)
-              }}
-            >
-              仍然提交
-            </AlertDialogAction>
-          </AlertDialogFooter>
-        </AlertDialogContent>
-      </AlertDialog>
-
       <AlertDialog
-        open={Boolean(deleteTarget)}
+        open={deleteTargets.length > 0}
         onOpenChange={(open) => {
-          if (!open) setDeleteTarget(null)
+          if (!open) setDeleteTargets([])
         }}
       >
         <AlertDialogContent>
           <AlertDialogHeader>
-            <AlertDialogTitle>删除这条任务？</AlertDialogTitle>
+            <AlertDialogTitle>
+              {deleteTargets.length > 1
+                ? `删除 ${deleteTargets.length} 条任务？`
+                : "删除这条任务？"}
+            </AlertDialogTitle>
             <AlertDialogDescription>
-              会从任务列表拿掉，并删除 outputs 里对应的成片。此操作不能恢复。
+              会从任务列表拿掉，并删除 outputs 里对应的成片。此操作不能恢复。进行中的任务不会被删。
             </AlertDialogDescription>
           </AlertDialogHeader>
           <AlertDialogFooter>
@@ -912,10 +1190,10 @@ export function StudioApp() {
             <AlertDialogAction
               variant="destructive"
               onClick={() => {
-                if (!deleteTarget) return
-                const job = deleteTarget
-                setDeleteTarget(null)
-                void deleteJob(job)
+                const targets = deleteTargets
+                setDeleteTargets([])
+                if (targets.length === 1) void deleteJob(targets[0])
+                else void deleteJobs(targets)
               }}
             >
               删除

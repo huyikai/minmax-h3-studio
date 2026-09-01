@@ -34,10 +34,14 @@ export async function GET(
           job &&
           (job.status === "success" ||
             job.status === "error" ||
-            job.status === "interrupted")
+            job.status === "interrupted" ||
+            job.status === "awaiting")
         ) {
           if (timer) clearInterval(timer)
           controller.close()
+        }
+        if (job && (job.status === "queued" || job.status === "running")) {
+          ensureJobWatch(id)
         }
       }
       void tick()

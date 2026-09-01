@@ -1,6 +1,7 @@
 import fs from "node:fs/promises"
-import type { Settings } from "@/lib/types"
+import type { H3UnetPrecision, Settings } from "@/lib/types"
 import { DEFAULT_SETTINGS } from "@/lib/types"
+import { isH3UnetPrecision } from "@/lib/h3-models"
 import { dataDir, settingsPath } from "@/lib/paths"
 
 async function ensureDataDir() {
@@ -18,6 +19,12 @@ export async function readSettings(): Promise<Settings> {
       comfyHost: "127.0.0.1",
       comfyPort: Number(parsed.comfyPort) || DEFAULT_SETTINGS.comfyPort,
       mappings: parsed.mappings ?? {},
+      comfyRoot: String(parsed.comfyRoot ?? ""),
+      extraModelsDir: String(parsed.extraModelsDir ?? ""),
+      h3UnetPrecision: isH3UnetPrecision(String(parsed.h3UnetPrecision ?? ""))
+        ? (parsed.h3UnetPrecision as H3UnetPrecision)
+        : "int8",
+      hfToken: String(parsed.hfToken ?? ""),
     }
   } catch {
     return { ...DEFAULT_SETTINGS, mappings: {} }
@@ -32,6 +39,12 @@ export async function writeSettings(next: Settings) {
     comfyHost: "127.0.0.1",
     comfyPort: Number(next.comfyPort) || DEFAULT_SETTINGS.comfyPort,
     mappings: next.mappings ?? {},
+    comfyRoot: String(next.comfyRoot ?? ""),
+    extraModelsDir: String(next.extraModelsDir ?? ""),
+    h3UnetPrecision: isH3UnetPrecision(String(next.h3UnetPrecision ?? ""))
+      ? next.h3UnetPrecision
+      : "int8",
+    hfToken: String(next.hfToken ?? ""),
   }
   await fs.writeFile(
     settingsPath(),

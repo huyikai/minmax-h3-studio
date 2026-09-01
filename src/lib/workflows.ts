@@ -66,6 +66,7 @@ export async function listWorkflowEntries(): Promise<WorkflowListItem[]> {
     family: item.family,
     bundled: true,
     overridden: userSet.has(item.file),
+    picker: item.picker !== false,
   }))
 
   for (const name of userFiles.sort((a, b) => a.localeCompare(b, "zh-CN"))) {
@@ -77,6 +78,7 @@ export async function listWorkflowEntries(): Promise<WorkflowListItem[]> {
       family: "custom",
       bundled: false,
       overridden: false,
+      picker: true,
     })
   }
 

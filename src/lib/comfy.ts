@@ -69,6 +69,45 @@ export async function getHealth() {
   }
 }
 
+export async function isMockComfy() {
+  try {
+    const response = await comfyFetch("/system_stats")
+    if (!response.ok) return false
+    const json = (await response.json()) as { system?: { os?: string } }
+    return json.system?.os === "mock"
+  } catch {
+    return false
+  }
+}
+
+export async function hasNodeClass(className: string) {
+  try {
+    const response = await comfyFetch(
+      `/object_info/${encodeURIComponent(className)}`
+    )
+    if (!response.ok) return false
+    const json = (await response.json()) as Record<string, unknown>
+    return Boolean(json[className])
+  } catch {
+    return false
+  }
+}
+
+export async function listModelFolder(folder: string) {
+  try {
+    const response = await comfyFetch(`/models/${encodeURIComponent(folder)}`)
+    if (response.ok) {
+      const data = (await response.json()) as unknown
+      if (Array.isArray(data)) {
+        return data.filter((item): item is string => typeof item === "string")
+      }
+    }
+  } catch {
+    // fall through to object_info
+  }
+  return [] as string[]
+}
+
 export async function listLoras() {
   const response = await comfyFetch("/models/loras")
   if (response.ok) {
@@ -207,14 +246,23 @@ export async function downloadView(file: MediaFile) {
   return Buffer.from(await response.arrayBuffer())
 }
 
-export async function saveJobOutput(job: Job, file: MediaFile) {
+export async function saveJobOutput(
+  job: Job,
+  file: MediaFile,
+  asName?: string
+) {
   const dir = jobOutputDir(job.id)
   await fs.mkdir(dir, { recursive: true })
   const bytes = await downloadView(file)
-  const filename = path.basename(file.filename)
+  const filename = asName ?? path.basename(file.filename)
   const fullPath = path.join(dir, filename)
   await fs.writeFile(fullPath, bytes)
   return fullPath
+}
+
+export async function missingMotionContextNodes() {
+  if (await hasNodeClass("MiniMaxH3MotionContext")) return [] as string[]
+  return ["MiniMaxH3MotionContext"]
 }
 
 function parseComfyError(text: string, status: number) {

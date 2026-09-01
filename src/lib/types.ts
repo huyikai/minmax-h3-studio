@@ -71,11 +71,17 @@ export type MappingOverrides = {
   loras?: LoraMapping[] | null
 }
 
+export type H3UnetPrecision = "int8" | "fp8" | "bf16"
+
 export type Settings = {
   comfyHost: string
   comfyPort: number
   defaultWorkflow: string | null
   mappings: Record<string, MappingOverrides>
+  comfyRoot: string
+  extraModelsDir: string
+  h3UnetPrecision: H3UnetPrecision
+  hfToken: string
 }
 
 export type LoraFormValue = {
@@ -89,11 +95,72 @@ export type LoraFormValue = {
 }
 
 export type JobStatus =
+  | "waiting"
+  | "queued"
+  | "running"
+  | "awaiting"
+  | "success"
+  | "error"
+  | "interrupted"
+
+export type JobKind = "short" | "long"
+
+export type LongSegmentStatus =
+  | "waiting"
   | "queued"
   | "running"
   | "success"
   | "error"
   | "interrupted"
+  | "voided"
+
+export type LongSegment = {
+  index: number
+  prompt: string
+  submittedPrompt: string
+  duration: number
+  seed: number
+  status: LongSegmentStatus
+  enqueuedAt?: string
+  comfyPromptId?: string
+  outputFile?: string
+  outputUrl?: string
+  error?: string
+}
+
+export type StoredInputMedia = {
+  slotId: string
+  file: string
+  originalName: string
+  contentType: string
+  kind?: MediaKind
+  index?: number
+}
+
+export type StudioQueueItem = {
+  jobId: string
+  kind: JobKind
+  state: "running" | "waiting"
+  label: string
+  prompt: string
+  enqueuedAt: string
+  segmentIndex?: number
+}
+
+export type StudioQueueSnapshot = {
+  paused: boolean
+  remaining: number
+  items: StudioQueueItem[]
+}
+
+export type LongVideoState = {
+  lockPrompt: string
+  finalized: boolean
+  aspectLocked: boolean
+  segments: LongSegment[]
+  stitchedFile?: string
+  stitchError?: string
+}
 
 export type JobProgress = {
   value: number
@@ -107,6 +174,7 @@ export type Job = {
   createdAt: string
   updatedAt: string
   status: JobStatus
+  kind?: JobKind
   workflowFile: string
   prompt: string
   duration: number
@@ -126,10 +194,16 @@ export type Job = {
   error?: string
   outputFile?: string
   submittedWorkflowFile?: string
+  enqueuedAt?: string
+  inputMedia?: StoredInputMedia[]
+  long?: LongVideoState
 }
 
-export type PublicJob = Job & {
+export type PublicJob = Omit<Job, "inputMedia"> & {
+  kind: JobKind
   outputUrl?: string
+  previewUrl?: string
+  stitchedUrl?: string
   workflowUrl: string
 }
 
@@ -156,4 +230,8 @@ export const DEFAULT_SETTINGS: Settings = {
   comfyPort: 8188,
   defaultWorkflow: null,
   mappings: {},
+  comfyRoot: "",
+  extraModelsDir: "",
+  h3UnetPrecision: "int8",
+  hfToken: "",
 }

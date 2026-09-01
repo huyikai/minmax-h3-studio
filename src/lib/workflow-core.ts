@@ -628,6 +628,20 @@ export function applyPatch(
   return next
 }
 
+export function applyH3UnetName(workflow: ApiWorkflow, unetName: string) {
+  const next = workflow
+  for (const node of Object.values(next)) {
+    if (node.class_type !== "UNETLoader") continue
+    const current = node.inputs.unet_name
+    if (typeof current !== "string") continue
+    if (/ref2va/i.test(current)) continue
+    if (/fl2va|minimax_h3/i.test(current)) {
+      node.inputs.unet_name = unetName
+    }
+  }
+  return next
+}
+
 export function scalarInput(value: unknown): unknown {
   if (Array.isArray(value)) return undefined
   return value

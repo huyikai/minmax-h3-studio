@@ -1,10 +1,13 @@
-export type WorkflowFamily = "official" | "turbo" | "reference" | "custom"
+import type { EnvironmentLine } from "@/lib/environment-types"
+
+export type WorkflowFamily = "official" | "turbo" | "reference" | "long" | "custom"
 
 export type BundledWorkflow = {
   file: string
   label: string
   description: string
   family: Exclude<WorkflowFamily, "custom">
+  picker?: boolean
 }
 
 export type WorkflowListItem = {
@@ -14,6 +17,7 @@ export type WorkflowListItem = {
   family: WorkflowFamily
   bundled: boolean
   overridden: boolean
+  picker?: boolean
 }
 
 export const BUNDLED_WORKFLOWS: BundledWorkflow[] = [
@@ -53,6 +57,14 @@ export const BUNDLED_WORKFLOWS: BundledWorkflow[] = [
     description: "Ref2VA。按需要加参考图、视频、音频，最多 9 / 3 / 3。",
     family: "reference",
   },
+  {
+    file: "h3-t2v-long.json",
+    label: "长视频 · 文生链",
+    description:
+      "官方文生 20 步，接上 Motion Context / Load / Save Latent / Trim。新建长视频用这份图。需要 ComfyUI-H3-Motion-Context。",
+    family: "long",
+    picker: false,
+  },
 ]
 
 export function bundledWorkflow(name: string) {
@@ -65,4 +77,12 @@ export function isBundledWorkflow(name: string) {
 
 export function workflowLabel(name: string) {
   return bundledWorkflow(name)?.label ?? name
+}
+
+export function workflowEnvironmentLine(name: string): EnvironmentLine {
+  const family = bundledWorkflow(name)?.family
+  if (family === "turbo") return "turbo"
+  if (family === "reference") return "reference"
+  if (family === "long") return "long"
+  return "short"
 }

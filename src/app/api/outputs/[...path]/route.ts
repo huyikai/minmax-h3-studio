@@ -33,7 +33,7 @@ export async function GET(
     return new Response(data, {
       headers: {
         "Content-Type": MIME[ext] ?? "application/octet-stream",
-        "Cache-Control": "public, max-age=31536000, immutable",
+        "Cache-Control": "private, no-cache",
       },
     })
   } catch {

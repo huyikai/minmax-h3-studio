@@ -41,6 +41,14 @@ import type {
 } from "@/lib/types"
 import type { WorkflowBundle } from "@/components/studio/types"
 import type { WorkflowListItem } from "@/lib/default-workflows"
+import type { EnvironmentLine } from "@/lib/environment-types"
+import { EnvironmentPanel } from "@/components/studio/environment-panel"
+import {
+  Tabs,
+  TabsContent,
+  TabsList,
+  TabsTrigger,
+} from "@/components/ui/tabs"
 
 type SettingsDialogProps = {
   open: boolean
@@ -51,6 +59,8 @@ type SettingsDialogProps = {
   workflowName: string
   workflows: WorkflowListItem[]
   bundle: WorkflowBundle | null
+  environmentLine: EnvironmentLine
+  focusEnvironment?: boolean
   onPortChange: (port: number) => Promise<void>
   onImported: (name: string) => Promise<void>
   onDeleted: (name: string) => Promise<void>
@@ -98,6 +108,8 @@ export function SettingsDialog({
   workflowName,
   workflows,
   bundle,
+  environmentLine,
+  focusEnvironment,
   onPortChange,
   onImported,
   onDeleted,
@@ -174,17 +186,30 @@ export function SettingsDialog({
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent
-        className="sm:max-w-2xl"
+        className="sm:max-w-3xl"
         onOpenAutoFocus={(event) => event.preventDefault()}
       >
         <DialogHeader>
           <DialogTitle>设置</DialogTitle>
           <DialogDescription>
-            Studio 只连本机 ComfyUI。自带官方 / Turbo 预设；也可以再上传自己的 API JSON。
+            环境栏负责 Comfy 目录、节点和模型。Studio 不代装 ComfyUI。工作流和字段映射在另一栏。
           </DialogDescription>
         </DialogHeader>
 
-        <div className="flex max-h-[70vh] flex-col gap-5 overflow-y-auto pr-1">
+        <Tabs
+          key={focusEnvironment ? "environment-focus" : "environment-default"}
+          defaultValue="environment"
+          className="min-h-0"
+        >
+          <TabsList variant="line" className="w-full">
+            <TabsTrigger value="environment">环境</TabsTrigger>
+            <TabsTrigger value="studio">连接与工作流</TabsTrigger>
+          </TabsList>
+          <TabsContent value="environment" className="max-h-[70vh] overflow-y-auto pr-1 pt-3">
+            <EnvironmentPanel line={environmentLine} />
+          </TabsContent>
+          <TabsContent value="studio" className="max-h-[70vh] overflow-y-auto pr-1 pt-3">
+        <div className="flex flex-col gap-5">
           <FieldGroup>
             <Field>
               <LabelWithHelp htmlFor="comfy-port" label="ComfyUI 端口">
@@ -287,7 +312,17 @@ export function SettingsDialog({
                         {item.name}
                       </span>
                     </span>
-                    {item.bundled && !item.overridden ? null : (
+                    <span className="flex shrink-0 items-center gap-1">
+                      <Button type="button" size="icon-sm" variant="ghost" asChild>
+                        <a
+                          href={`/api/workflows/${encodeURIComponent(item.name)}?raw=1`}
+                          download={item.name}
+                        >
+                          <DownloadIcon />
+                          <span className="sr-only">下载 {item.label}</span>
+                        </a>
+                      </Button>
+                      {item.bundled && !item.overridden ? null : (
                       <Button
                         type="button"
                         size="icon-sm"
@@ -305,7 +340,8 @@ export function SettingsDialog({
                           {item.overridden ? `恢复 ${item.label}` : `删除 ${item.label}`}
                         </span>
                       </Button>
-                    )}
+                      )}
+                    </span>
                   </li>
                 ))}
               </ul>
@@ -396,6 +432,8 @@ export function SettingsDialog({
             )}
           </FieldGroup>
         </div>
+          </TabsContent>
+        </Tabs>
 
         <DialogFooter>
           <Button type="button" variant="outline" onClick={() => onOpenChange(false)}>

@@ -1,7 +1,8 @@
 import fs from "node:fs/promises"
 import path from "node:path"
-import type { Job, PublicJob } from "@/lib/types"
+import type { Job, LongSegment, PublicJob } from "@/lib/types"
 import { dataDir, jobOutputDir, jobsPath } from "@/lib/paths"
+import { lastSuccessfulSegment } from "@/lib/long-video"
 
 async function ensure() {
   await fs.mkdir(dataDir(), { recursive: true })
@@ -50,12 +51,35 @@ export function isActiveStatus(status: Job["status"]) {
 }
 
 export async function removeJob(id: string) {
+  const result = await removeJobs([id])
+  return result.deleted.includes(id)
+}
+
+export async function removeJobs(ids: string[]) {
+  const wanted = new Set(ids.filter((id) => typeof id === "string" && id.length > 0))
   const jobs = await readJobs()
-  const next = jobs.filter((job) => job.id !== id)
-  if (next.length === jobs.length) return false
-  await writeJobs(next)
-  await fs.rm(jobOutputDir(id), { recursive: true, force: true })
-  return true
+  const deleted: string[] = []
+  const skipped: string[] = []
+  const keep: Job[] = []
+  for (const job of jobs) {
+    if (!wanted.has(job.id)) {
+      keep.push(job)
+      continue
+    }
+    if (isActiveStatus(job.status)) {
+      skipped.push(job.id)
+      keep.push(job)
+      continue
+    }
+    deleted.push(job.id)
+  }
+  if (deleted.length > 0) {
+    await writeJobs(keep)
+    await Promise.all(
+      deleted.map((id) => fs.rm(jobOutputDir(id), { recursive: true, force: true }))
+    )
+  }
+  return { deleted, skipped }
 }
 
 export function activeJob(jobs: Job[]) {
@@ -66,16 +90,53 @@ export async function getActiveJob() {
   return activeJob(await readJobs())
 }
 
-export function toPublicJob(job: Job): PublicJob {
+function outputUrl(jobId: string, file: string | undefined, bust: string) {
+  if (!file) return undefined
+  return `/api/outputs/${jobId}/${path.basename(file)}?t=${encodeURIComponent(bust)}`
+}
+
+function publicSegment(jobId: string, segment: LongSegment, bust: string): LongSegment {
   return {
-    ...job,
-    outputFile: job.outputFile ? path.basename(job.outputFile) : undefined,
+    ...segment,
+    outputFile: segment.outputFile ? path.basename(segment.outputFile) : undefined,
+    outputUrl: outputUrl(jobId, segment.outputFile, bust),
+  }
+}
+
+export function toPublicJob(job: Job): PublicJob {
+  const kind = job.kind ?? "short"
+  const bust = job.updatedAt
+  const lastSuccess = lastSuccessfulSegment(job.long)
+  const previewFile = kind === "long" ? lastSuccess?.outputFile : job.outputFile
+  const stitchedFile = kind === "long" ? job.long?.stitchedFile : undefined
+  const outputFile =
+    kind === "long" && job.long?.finalized
+      ? (stitchedFile ?? previewFile)
+      : previewFile
+  const rest = { ...job }
+  delete rest.inputMedia
+
+  return {
+    ...rest,
+    kind,
+    outputFile: outputFile ? path.basename(outputFile) : undefined,
     submittedWorkflowFile: job.submittedWorkflowFile
       ? "workflow.json"
       : undefined,
-    outputUrl: job.outputFile
-      ? `/api/outputs/${job.id}/${path.basename(job.outputFile)}`
-      : undefined,
+    previewUrl: outputUrl(job.id, previewFile, bust),
+    stitchedUrl: outputUrl(job.id, stitchedFile, bust),
+    outputUrl: outputUrl(job.id, outputFile, bust),
     workflowUrl: `/api/jobs/${job.id}/workflow`,
+    long: job.long
+      ? {
+          ...job.long,
+          stitchedFile: job.long.stitchedFile
+            ? path.basename(job.long.stitchedFile)
+            : undefined,
+          segments: job.long.segments.map((segment) =>
+            publicSegment(job.id, segment, bust)
+          ),
+        }
+      : undefined,
   }
 }

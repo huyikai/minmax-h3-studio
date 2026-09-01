@@ -1,40 +1,62 @@
 import { randomUUID } from "node:crypto"
 import { ASPECT_PRESETS } from "@/lib/types"
-import type { Job, LoraFormValue, MediaKind, WorkflowMapping } from "@/lib/types"
-import { getActiveJob, listJobs, toPublicJob, upsertJob } from "@/lib/jobs"
-import { readSettings, writeSettings } from "@/lib/settings"
-import { getHealth, newClientId, submitPrompt, uploadInputFile } from "@/lib/comfy"
-import { applyPatch, parseApiWorkflow, type MediaPatch } from "@/lib/workflow-core"
-import { readWorkflowBundle, readWorkflowFile } from "@/lib/workflow-service"
-import { ensureJobWatch, writeSubmittedWorkflow } from "@/lib/runner"
-import {
-  REF_KINDS,
-  REF_LIMITS,
-  parseRefSlotId,
-  refKindLabel,
-  refSlotId,
-} from "@/lib/refs"
+import type { Job, LoraFormValue } from "@/lib/types"
+import { listJobs, removeJobs, toPublicJob, upsertJob, getJob } from "@/lib/jobs"
+import { evaluateEnvironment, environmentLineFor } from "@/lib/environment"
+import { emptyLongState, LONG_T2V_FILE } from "@/lib/long-video"
+import { persistUploadedMedia } from "@/lib/job-media"
+import { afterEnqueue, ensureBootPause, pumpQueue, queueSnapshot } from "@/lib/studio-queue"
+import { newClientId } from "@/lib/comfy"
+import { readWorkflowBundle } from "@/lib/workflow-service"
+import { ensureJobWatch } from "@/lib/runner"
 
 export const dynamic = "force-dynamic"
 
 export async function GET() {
+  await ensureBootPause()
+  void pumpQueue()
   const jobs = await listJobs()
   for (const job of jobs) {
     if (job.status === "queued" || job.status === "running") {
       ensureJobWatch(job.id)
     }
   }
-  return Response.json({ jobs: jobs.map(toPublicJob) })
+  return Response.json({
+    jobs: jobs.map(toPublicJob),
+    queue: await queueSnapshot(jobs),
+  })
+}
+
+export async function DELETE(request: Request) {
+  const body = (await request.json()) as { ids?: unknown }
+  const ids = Array.isArray(body.ids)
+    ? body.ids.filter((id): id is string => typeof id === "string" && id.length > 0)
+    : []
+  if (ids.length === 0) {
+    return Response.json({ error: "请选择要删除的任务" }, { status: 400 })
+  }
+  const result = await removeJobs(ids)
+  await pumpQueue()
+  if (result.deleted.length === 0 && result.skipped.length > 0) {
+    return Response.json(
+      { error: "进行中的任务不能删除，请先中断。", ...result },
+      { status: 409 }
+    )
+  }
+  return Response.json(result)
 }
 
 export async function POST(request: Request) {
   const form = await request.formData()
+  if (String(form.get("kind") ?? "") === "long") {
+    return createLongJob(form)
+  }
+
   const workflowFile = String(form.get("workflowFile") ?? "")
   const prompt = String(form.get("prompt") ?? "").trim()
   const duration = Number(form.get("duration") ?? 5)
   const aspect = String(form.get("aspect") ?? "16:9")
   const seed = Number(form.get("seed") ?? 1)
-  const ignoreBusy = String(form.get("ignoreBusy") ?? "") === "true"
   const stepsRaw = form.get("steps")
   const cfgRaw = form.get("cfg")
   const loras = parseLoras(String(form.get("loras") ?? "[]"))
@@ -49,48 +71,26 @@ export async function POST(request: Request) {
   const preset =
     ASPECT_PRESETS.find((item) => item.id === aspect) ?? ASPECT_PRESETS[0]
 
-  const active = await getActiveJob()
-  if (active) {
+  const line = environmentLineFor(workflowFile)
+  const env = await evaluateEnvironment(line)
+  if (!env.ready) {
     return Response.json(
-      {
-        error: "已有任务正在进行",
-        code: "studio_busy",
-        jobId: active.id,
-      },
-      { status: 409 }
+      { error: env.summary, code: "environment_incomplete", gaps: env.gaps },
+      { status: 412 }
     )
   }
 
-  const health = await getHealth()
-  if (!health.ok) {
-    return Response.json(
-      { error: health.error ?? "无法连接 ComfyUI", code: "comfy_down" },
-      { status: 503 }
-    )
-  }
-  if (health.queueRemaining > 0 && !ignoreBusy) {
-    return Response.json(
-      {
-        error: "ComfyUI 队列里已有任务",
-        code: "comfy_busy",
-        queueRemaining: health.queueRemaining,
-      },
-      { status: 409 }
-    )
-  }
-
-  const settings = await readSettings()
   const bundle = await readWorkflowBundle(workflowFile)
-  const { data } = await readWorkflowFile(workflowFile)
-  const workflow = parseApiWorkflow(data)
+  const jobId = randomUUID()
+  const now = new Date().toISOString()
 
-  let media: MediaPatch[]
+  let inputMedia
   let mediaNames: string[]
   let firstFrameName: string | undefined
   let lastFrameName: string | undefined
   try {
-    const collected = await collectUploadedMedia(form, bundle.mapping)
-    media = collected.media
+    const collected = await persistUploadedMedia(jobId, form, bundle.mapping)
+    inputMedia = collected.inputMedia
     mediaNames = collected.mediaNames
     firstFrameName = collected.firstFrameName
     lastFrameName = collected.lastFrameName
@@ -101,136 +101,64 @@ export async function POST(request: Request) {
     )
   }
 
-  const patched = applyPatch(workflow, bundle.mapping, {
-    prompt,
-    duration,
-    width: preset.width,
-    height: preset.height,
-    seed: Number.isFinite(seed) ? seed : Math.floor(Math.random() * 1_000_000_000),
-    media,
-    loras,
-    steps: stepsRaw ? Number(stepsRaw) : bundle.values.steps,
-    cfg: cfgRaw ? Number(cfgRaw) : bundle.values.cfg,
-  })
-
-  const jobId = randomUUID()
-  const clientId = newClientId()
-  const submittedPath = await writeSubmittedWorkflow(jobId, patched)
-
   const job: Job = {
     id: jobId,
-    createdAt: new Date().toISOString(),
-    updatedAt: new Date().toISOString(),
-    status: "queued",
+    createdAt: now,
+    updatedAt: now,
+    status: "waiting",
+    kind: "short",
     workflowFile,
     prompt,
     duration,
     aspect: preset.id,
     width: preset.width,
     height: preset.height,
-    seed: Number.isFinite(seed) ? seed : 0,
+    seed: Number.isFinite(seed) ? seed : Math.floor(Math.random() * 1_000_000_000),
     firstFrameName,
     lastFrameName,
     mediaNames: mediaNames.length ? mediaNames : undefined,
     loras,
     steps: stepsRaw ? Number(stepsRaw) : bundle.values.steps,
     cfg: cfgRaw ? Number(cfgRaw) : bundle.values.cfg,
-    clientId,
-    submittedWorkflowFile: submittedPath,
+    clientId: newClientId(),
+    enqueuedAt: now,
+    inputMedia: inputMedia.length ? inputMedia : undefined,
   }
 
   await upsertJob(job)
-
-  try {
-    const promptId = await submitPrompt(patched, clientId)
-    const running = await upsertJob({
-      ...job,
-      status: "running",
-      comfyPromptId: promptId,
-    })
-    ensureJobWatch(running.id)
-    if (settings.defaultWorkflow !== workflowFile) {
-      await writeSettings({ ...settings, defaultWorkflow: workflowFile })
-    }
-    return Response.json({ job: toPublicJob(running) })
-  } catch (error) {
-    const failed = await upsertJob({
-      ...job,
-      status: "error",
-      error: error instanceof Error ? error.message : "提交失败",
-    })
-    return Response.json(
-      { job: toPublicJob(failed), error: failed.error },
-      { status: 502 }
-    )
-  }
+  await afterEnqueue()
+  const current = (await getJob(jobId)) ?? job
+  return Response.json({
+    job: toPublicJob(current),
+    queue: await queueSnapshot(),
+  })
 }
 
-async function collectUploadedMedia(form: FormData, mapping: WorkflowMapping) {
-  const uploads = new Map<string, File>()
-  for (const [key, value] of form.entries()) {
-    if (!key.startsWith("media:")) continue
-    if (!(value instanceof File) || value.size <= 0) continue
-    uploads.set(key.slice("media:".length), value)
+async function createLongJob(form: FormData) {
+  const aspect = String(form.get("aspect") ?? "16:9")
+  const lockPrompt = String(form.get("lockPrompt") ?? "")
+  const preset =
+    ASPECT_PRESETS.find((item) => item.id === aspect) ?? ASPECT_PRESETS[0]
+  const now = new Date().toISOString()
+  const job: Job = {
+    id: randomUUID(),
+    createdAt: now,
+    updatedAt: now,
+    status: "awaiting",
+    kind: "long",
+    workflowFile: LONG_T2V_FILE,
+    prompt: "",
+    duration: 0,
+    aspect: preset.id,
+    width: preset.width,
+    height: preset.height,
+    seed: 0,
+    loras: [],
+    clientId: newClientId(),
+    long: emptyLongState(lockPrompt),
   }
-
-  const media: MediaPatch[] = []
-  const mediaNames: string[] = []
-  let firstFrameName: string | undefined
-  let lastFrameName: string | undefined
-
-  async function uploadOne(slotId: string, file: File, label: string, extra?: Pick<MediaPatch, "kind" | "index">) {
-    const filename = await uploadInputFile(
-      {
-        filename: file.name || `${slotId}.bin`,
-        bytes: Buffer.from(await file.arrayBuffer()),
-        contentType: file.type || "application/octet-stream",
-      },
-      `上传${label}失败`
-    )
-    media.push({ slotId, filename, ...extra })
-    mediaNames.push(file.name)
-    return file.name
-  }
-
-  for (const slot of mapping.media ?? []) {
-    if (slot.role === "refImage" || slot.role === "refVideo" || slot.role === "refAudio") {
-      continue
-    }
-    const file = uploads.get(slot.id)
-    if (!file) continue
-    const name = await uploadOne(slot.id, file, slot.label)
-    if (slot.role === "firstFrame") firstFrameName = name
-    if (slot.role === "lastFrame") lastFrameName = name
-  }
-
-  if (mapping.dynamicRefs) {
-    const grouped: Record<MediaKind, Array<{ index: number; file: File }>> = {
-      image: [],
-      video: [],
-      audio: [],
-    }
-    for (const [slotId, file] of uploads) {
-      const parsed = parseRefSlotId(slotId)
-      if (!parsed) continue
-      grouped[parsed.kind].push({ index: parsed.index, file })
-    }
-    for (const kind of REF_KINDS) {
-      const items = grouped[kind].sort((a, b) => a.index - b.index)
-      if (items.length > REF_LIMITS[kind]) {
-        throw new Error(`${refKindLabel(kind)}最多 ${REF_LIMITS[kind]} 个`)
-      }
-      for (let index = 0; index < items.length; index++) {
-        const slotId = refSlotId(kind, index)
-        await uploadOne(slotId, items[index].file, `${refKindLabel(kind)} ${index + 1}`, {
-          kind,
-          index,
-        })
-      }
-    }
-  }
-
-  return { media, mediaNames, firstFrameName, lastFrameName }
+  const saved = await upsertJob(job)
+  return Response.json({ job: toPublicJob(saved) })
 }
 
 function parseLoras(raw: string): LoraFormValue[] {

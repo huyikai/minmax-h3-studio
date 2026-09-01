@@ -37,6 +37,7 @@ type PromptGuideProps = {
   disabled?: boolean
   compact?: boolean
   docked?: boolean
+  extraRules?: string[]
   monitorRef?: React.RefObject<HTMLElement | null>
   onPinnedChange: (pinned: boolean) => void
   onClose: () => void
@@ -53,6 +54,7 @@ export function PromptGuide({
   disabled,
   compact = false,
   docked = false,
+  extraRules,
   monitorRef,
   onPinnedChange,
   onClose,
@@ -144,6 +146,7 @@ export function PromptGuide({
       compact={compact && desktop}
       pinned={pinned}
       disabled={disabled}
+      extraRules={extraRules}
       onPinnedChange={onPinnedChange}
       onInsert={insert}
       onCopy={() => void copyPack()}
@@ -244,6 +247,7 @@ function GuideBody({
   compact,
   pinned,
   disabled,
+  extraRules,
   onPinnedChange,
   onInsert,
   onCopy,
@@ -253,12 +257,13 @@ function GuideBody({
   compact: boolean
   pinned: boolean
   disabled?: boolean
+  extraRules?: string[]
   onPinnedChange: (pinned: boolean) => void
   onInsert: (id: GuideSectionId) => void
   onCopy: () => void
 }) {
   const sections = guideSections(mode)
-  const rules = guideRules(mode)
+  const rules = [...guideRules(mode), ...(extraRules ?? [])]
 
   return (
     <div className="flex h-full min-h-0 flex-col">
@@ -309,6 +314,9 @@ function GuideBody({
           className="min-h-0 flex-1 overflow-y-auto overscroll-contain"
         >
           <div className="flex flex-col gap-3 p-3">
+            <p className="text-[11px] leading-relaxed text-muted-foreground text-pretty">
+              点英文骨架写入输入框。已经有的字段会选中，不会再插一份。灰色中文不会写进去。
+            </p>
             <ul className="list-disc space-y-1.5 pl-4 text-xs leading-relaxed text-muted-foreground">
               {rules.map((rule) => (
                 <li key={rule}>{rule}</li>
@@ -350,9 +358,6 @@ function GuideBody({
                 </button>
               ))}
             </div>
-            <p className="text-[11px] text-muted-foreground">
-              点英文骨架写入输入框。已经有的字段会选中，不会再插一份。灰色中文不会写进去。
-            </p>
           </div>
         </div>
       )}

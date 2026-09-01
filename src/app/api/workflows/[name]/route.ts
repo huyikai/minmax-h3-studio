@@ -1,15 +1,26 @@
-import { readWorkflowBundle, removeWorkflow, saveMappingOverrides } from "@/lib/workflow-service"
+import { readWorkflowBundle, readWorkflowFile, removeWorkflow, saveMappingOverrides } from "@/lib/workflow-service"
 import type { MappingOverrides } from "@/lib/types"
 
 export const dynamic = "force-dynamic"
 
 export async function GET(
-  _request: Request,
+  request: Request,
   context: RouteContext<"/api/workflows/[name]">
 ) {
   const { name } = await context.params
+  const decoded = decodeURIComponent(name)
+  const raw = new URL(request.url).searchParams.get("raw") === "1"
   try {
-    const bundle = await readWorkflowBundle(decodeURIComponent(name))
+    if (raw) {
+      const { filename, data } = await readWorkflowFile(decoded)
+      return new Response(`${JSON.stringify(data, null, 2)}\n`, {
+        headers: {
+          "Content-Type": "application/json; charset=utf-8",
+          "Content-Disposition": `attachment; filename="${filename}"`,
+        },
+      })
+    }
+    const bundle = await readWorkflowBundle(decoded)
     return Response.json(bundle)
   } catch (error) {
     return Response.json(

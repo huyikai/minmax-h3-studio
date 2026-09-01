@@ -7,9 +7,11 @@ export const dynamic = "force-dynamic"
 export async function GET() {
   const settings = await readSettings()
   const { http } = await comfyBaseUrl()
+  const { hfToken: _token, ...safe } = settings
   return Response.json({
-    ...settings,
+    ...safe,
     comfyUrl: http,
+    hfTokenSet: Boolean(settings.hfToken),
   })
 }
 
@@ -28,6 +30,18 @@ export async function PUT(request: Request) {
         ? current.defaultWorkflow
         : body.defaultWorkflow,
     mappings: body.mappings ?? current.mappings,
+    comfyRoot:
+      body.comfyRoot === undefined ? current.comfyRoot : String(body.comfyRoot),
+    extraModelsDir:
+      body.extraModelsDir === undefined
+        ? current.extraModelsDir
+        : String(body.extraModelsDir),
+    h3UnetPrecision:
+      body.h3UnetPrecision === undefined
+        ? current.h3UnetPrecision
+        : body.h3UnetPrecision,
+    hfToken: body.hfToken === undefined ? current.hfToken : String(body.hfToken),
   })
-  return Response.json(next)
+  const { hfToken: _token, ...safe } = next
+  return Response.json({ ...safe, hfTokenSet: Boolean(next.hfToken) })
 }

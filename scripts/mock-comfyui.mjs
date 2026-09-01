@@ -18,6 +18,57 @@ const queue = { queue_running: [], queue_pending: [] }
 const dir = path.dirname(fileURLToPath(import.meta.url))
 const MP4 = fs.readFileSync(path.join(dir, "mock-output.mp4"))
 
+const UNETS = [
+  "minimax_h3_fl2va_pruned_int8_convrot.safetensors",
+  "minimax_h3_fl2va_pruned_fp8_scaled.safetensors",
+  "minimax_h3_fl2va_pruned_bf16.safetensors",
+  "minimax_h3_ref2va_pruned_int8_convrot.safetensors",
+  "minimax_h3_ref2va_pruned_fp8_scaled.safetensors",
+  "minimax_h3_ref2va_pruned_bf16.safetensors",
+]
+const VAES = [
+  "minimax_h3_video_vae_fp16.safetensors",
+  "minimax_h3_audio_vae_fp32.safetensors",
+]
+const TEXT_ENCODERS = ["qwen3vl_32b_minimax_h3_nvfp4_awq.safetensors"]
+const LORAS = [
+  "minimax_h3_fl2v_turbo_8step_v1.0_comfyui_bf16.safetensors",
+  "minimax_h3_turbo_v4_step600_ema.safetensors",
+]
+
+function mockNode(name) {
+  if (name === "UNETLoader") {
+    return { input: { required: { unet_name: [UNETS] } } }
+  }
+  if (name === "VAELoader") {
+    return { input: { required: { vae_name: [VAES] } } }
+  }
+  if (name === "CLIPLoader") {
+    return { input: { required: { clip_name: [TEXT_ENCODERS] } } }
+  }
+  if (name === "LoraLoaderModelOnly") {
+    return { input: { required: { lora_name: [LORAS] } } }
+  }
+  return { input: { required: {} } }
+}
+
+const OBJECT_INFO = Object.fromEntries(
+  [
+    "MiniMaxH3ImageToVideo",
+    "MiniMaxH3ReferenceToVideo",
+    "MiniMaxH3MotionContext",
+    "MiniMaxH3MotionContextTrim",
+    "MiniMaxH3MotionContextSaveLatent",
+    "MiniMaxH3MotionContextLoadLatent",
+    "MiniMaxH3TurboLoRA",
+    "MiniMaxH3TurboSampler",
+    "UNETLoader",
+    "VAELoader",
+    "CLIPLoader",
+    "LoraLoaderModelOnly",
+  ].map((name) => [name, mockNode(name)])
+)
+
 const server = http.createServer(async (req, res) => {
   const url = new URL(req.url ?? "/", `http://127.0.0.1:${PORT}`)
   res.setHeader("Access-Control-Allow-Origin", "*")
@@ -36,7 +87,32 @@ const server = http.createServer(async (req, res) => {
     return
   }
   if (url.pathname === "/models/loras" && req.method === "GET") {
-    json(res, ["minimax_h3_fl2v_turbo_8step_v1.0_comfyui_bf16.safetensors"])
+    json(res, LORAS)
+    return
+  }
+  if (url.pathname === "/models/diffusion_models" && req.method === "GET") {
+    json(res, UNETS)
+    return
+  }
+  if (url.pathname === "/models/vae" && req.method === "GET") {
+    json(res, VAES)
+    return
+  }
+  if (url.pathname === "/models/text_encoders" && req.method === "GET") {
+    json(res, TEXT_ENCODERS)
+    return
+  }
+  if (url.pathname === "/object_info" && req.method === "GET") {
+    json(res, OBJECT_INFO)
+    return
+  }
+  if (url.pathname.startsWith("/object_info/") && req.method === "GET") {
+    const name = decodeURIComponent(url.pathname.slice("/object_info/".length))
+    if (OBJECT_INFO[name]) {
+      json(res, { [name]: OBJECT_INFO[name] })
+      return
+    }
+    json(res, { [name]: mockNode(name) })
     return
   }
   if (url.pathname === "/upload/image" && req.method === "POST") {

@@ -1,0 +1,65 @@
+import type { Job, JobStatus, PublicJob } from "@/lib/types"
+import {
+  chainDeliveredSeconds,
+  formatApproxSeconds,
+  isLongJob,
+  lastSuccessfulSegment,
+  successfulSegments,
+  waitingSegment,
+} from "@/lib/long-video"
+
+export { isLongJob }
+
+export function isBusyJob(job: Pick<Job, "status">) {
+  return job.status === "queued" || job.status === "running"
+}
+
+export function isWaitingJob(job: Pick<Job, "status">) {
+  return job.status === "waiting"
+}
+
+export function statusLabel(job: Pick<Job, "status" | "kind">) {
+  if (job.kind === "long" && job.status === "awaiting") return "待续"
+  switch (job.status as JobStatus) {
+    case "waiting":
+      return "等待"
+    case "queued":
+      return "排队中"
+    case "running":
+      return "生成中"
+    case "awaiting":
+      return "待续"
+    case "success":
+      return "完成"
+    case "error":
+      return "失败"
+    case "interrupted":
+      return "已中断"
+    default:
+      return "未知"
+  }
+}
+
+export function jobListMeta(job: PublicJob) {
+  if (job.kind === "long") {
+    const count = successfulSegments(job.long).length
+    const approx = formatApproxSeconds(chainDeliveredSeconds(job.long))
+    return [`已做 ${count} 段`, approx, job.aspect]
+  }
+  return [`${job.duration}s`, job.aspect]
+}
+
+export function jobListPrompt(job: PublicJob) {
+  if (job.kind === "long") {
+    const waiting = waitingSegment(job.long)
+    if (waiting) return waiting.prompt || "（长视频）"
+    const last = lastSuccessfulSegment(job.long)
+    return last?.prompt || job.prompt || job.long?.lockPrompt || "（长视频）"
+  }
+  return job.prompt || "（无提示词）"
+}
+
+export function jobPreviewUrl(job: PublicJob) {
+  if (job.kind === "long") return job.previewUrl ?? job.outputUrl
+  return job.outputUrl
+}

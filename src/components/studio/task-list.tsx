@@ -1,6 +1,7 @@
 "use client"
 
-import { EllipsisVerticalIcon } from "lucide-react"
+import { useMemo, useState } from "react"
+import { CheckIcon, EllipsisVerticalIcon } from "lucide-react"
 import { Button } from "@/components/ui/button"
 import {
   DropdownMenu,
@@ -16,126 +17,216 @@ import {
 } from "@/components/ui/empty"
 import { cn } from "@/lib/utils"
 import type { PublicJob } from "@/lib/types"
+import {
+  isBusyJob,
+  jobListMeta,
+  jobListPrompt,
+  jobPreviewUrl,
+  statusLabel,
+} from "@/lib/job-view"
 
-export function isBusyJob(job: PublicJob) {
-  return job.status === "queued" || job.status === "running"
-}
-
-export function statusLabel(job: PublicJob) {
-  switch (job.status) {
-    case "queued":
-      return "排队中"
-    case "running":
-      return "生成中"
-    case "success":
-      return "完成"
-    case "error":
-      return "失败"
-    case "interrupted":
-      return "已中断"
-  }
-}
+export { isBusyJob, statusLabel }
 
 type TaskListProps = {
   jobs: PublicJob[]
   currentId?: string
+  emptyHint?: string
   onSelect: (job: PublicJob) => void
-  onOpenDetail: (job: PublicJob) => void
   onDelete: (job: PublicJob) => void
+  onDeleteMany: (jobs: PublicJob[]) => void
 }
 
 export function TaskList({
   jobs,
   currentId,
+  emptyHint = "点上方新建短片或新建长视频。",
   onSelect,
-  onOpenDetail,
   onDelete,
+  onDeleteMany,
 }: TaskListProps) {
+  const [selecting, setSelecting] = useState(false)
+  const [selected, setSelected] = useState<Set<string>>(new Set())
+
+  const deletable = useMemo(
+    () => jobs.filter((job) => !isBusyJob(job)),
+    [jobs]
+  )
+  const selectedJobs = jobs.filter((job) => selected.has(job.id) && !isBusyJob(job))
+
+  function exitSelect() {
+    setSelecting(false)
+    setSelected(new Set())
+  }
+
+  function toggle(id: string, allowed: boolean) {
+    if (!allowed) return
+    setSelected((current) => {
+      const next = new Set(current)
+      if (next.has(id)) next.delete(id)
+      else next.add(id)
+      return next
+    })
+  }
+
+  function selectAllDeletable() {
+    setSelected(new Set(deletable.map((job) => job.id)))
+  }
+
   if (jobs.length === 0) {
     return (
       <Empty className="rounded-xl border bg-card/40 py-10">
         <EmptyHeader>
           <EmptyTitle>还没有任务</EmptyTitle>
-          <EmptyDescription>点上方新建。</EmptyDescription>
+          <EmptyDescription>{emptyHint}</EmptyDescription>
         </EmptyHeader>
       </Empty>
     )
   }
 
   return (
-    <ul className="flex flex-col gap-2">
-      {jobs.map((job) => {
-        const selected = currentId === job.id
-        const busy = isBusyJob(job)
-        return (
-          <li key={job.id}>
-            <div
-              className={cn(
-                "flex gap-1 rounded-lg border bg-card p-1.5 transition-colors",
-                selected && "border-primary/70 bg-primary/10"
-              )}
-            >
-              <button
+    <div className="flex flex-col gap-2">
+      <div className="flex items-center justify-between gap-2">
+        {selecting ? (
+          <>
+            <Button type="button" size="sm" variant="ghost" onClick={exitSelect}>
+              取消
+            </Button>
+            <div className="flex items-center gap-2">
+              <Button
                 type="button"
-                aria-current={selected ? "true" : undefined}
-                className="flex min-w-0 flex-1 gap-2 rounded-md p-1 text-left hover:bg-muted/50"
-                onClick={() => onSelect(job)}
+                size="sm"
+                variant="outline"
+                onClick={selectAllDeletable}
+                disabled={deletable.length === 0}
               >
-                <div className="relative aspect-video w-24 shrink-0 overflow-hidden rounded-md studio-letterbox">
-                  {job.outputUrl ? (
-                    <video
-                      src={job.outputUrl}
-                      muted
-                      playsInline
-                      preload="metadata"
-                      className="size-full object-cover"
-                    />
-                  ) : (
-                    <span className="flex size-full items-center justify-center font-mono text-[10px] text-muted-foreground">
-                      {statusLabel(job)}
-                    </span>
-                  )}
-                </div>
-                <span className="flex min-w-0 flex-1 flex-col gap-1">
-                  <span className="text-xs font-medium">{statusLabel(job)}</span>
-                  <span className="line-clamp-2 text-xs leading-relaxed text-muted-foreground">
-                    {job.prompt || "（无提示词）"}
-                  </span>
-                  <span className="font-mono text-[11px] tabular-nums text-muted-foreground">
-                    {job.duration}s · {job.aspect}
-                  </span>
-                </span>
-              </button>
-              <DropdownMenu>
-                <DropdownMenuTrigger asChild>
-                  <Button
-                    type="button"
-                    size="icon-sm"
-                    variant="ghost"
-                    className="mt-0.5 shrink-0"
-                    aria-label="任务菜单"
-                  >
-                    <EllipsisVerticalIcon />
-                  </Button>
-                </DropdownMenuTrigger>
-                <DropdownMenuContent align="end" className="w-auto min-w-36">
-                  <DropdownMenuItem onSelect={() => onOpenDetail(job)}>
-                    任务详情
-                  </DropdownMenuItem>
-                  {busy ? null : (
-                    <DropdownMenuItem
-                      variant="destructive"
-                      onSelect={() => onDelete(job)}
-                    >
-                      删除
-                    </DropdownMenuItem>
-                  )}
-                </DropdownMenuContent>
-              </DropdownMenu>
+                全选
+              </Button>
+              <Button
+                type="button"
+                size="sm"
+                variant="destructive"
+                disabled={selectedJobs.length === 0}
+                onClick={() => onDeleteMany(selectedJobs)}
+              >
+                删除 {selectedJobs.length || ""}
+              </Button>
             </div>
-          </li>
-        )
-      })}
-    </ul>
+          </>
+        ) : (
+          <>
+            <p className="text-xs text-muted-foreground">{jobs.length} 条任务</p>
+            <Button
+              type="button"
+              size="sm"
+              variant="outline"
+              onClick={() => setSelecting(true)}
+            >
+              选择
+            </Button>
+          </>
+        )}
+      </div>
+      <ul className="flex flex-col gap-2">
+        {jobs.map((job) => {
+          const isSelected = selected.has(job.id)
+          const current = currentId === job.id
+          const busy = isBusyJob(job)
+          const preview = jobPreviewUrl(job)
+          return (
+            <li key={job.id}>
+              <div
+                className={cn(
+                  "flex gap-1 rounded-lg border bg-card p-1.5 transition-colors",
+                  current && !selecting && "border-primary/70 bg-primary/10",
+                  selecting && isSelected && "border-primary/70 bg-primary/10"
+                )}
+              >
+                {selecting ? (
+                  <button
+                    type="button"
+                    role="checkbox"
+                    aria-checked={isSelected}
+                    aria-label={busy ? "进行中，不能删除" : "选中任务"}
+                    disabled={busy}
+                    className={cn(
+                      "mt-1 ml-1 flex size-5 shrink-0 items-center justify-center rounded-sm border",
+                      busy && "cursor-not-allowed opacity-40",
+                      isSelected
+                        ? "border-primary bg-primary text-primary-foreground"
+                        : "border-input bg-background"
+                    )}
+                    onClick={() => toggle(job.id, !busy)}
+                  >
+                    {isSelected ? <CheckIcon className="size-3" /> : null}
+                  </button>
+                ) : null}
+                <button
+                  type="button"
+                  aria-current={current ? "true" : undefined}
+                  className="flex min-w-0 flex-1 gap-2 rounded-md p-1 text-left hover:bg-muted/50"
+                  onClick={() => {
+                    if (selecting) toggle(job.id, !busy)
+                    else onSelect(job)
+                  }}
+                >
+                  <div className="relative aspect-video w-24 shrink-0 overflow-hidden rounded-md studio-letterbox">
+                    {preview ? (
+                      <video
+                        src={preview}
+                        muted
+                        playsInline
+                        preload="metadata"
+                        className="size-full object-cover"
+                      />
+                    ) : (
+                      <span className="flex size-full items-center justify-center font-mono text-[10px] text-muted-foreground">
+                        {statusLabel(job)}
+                      </span>
+                    )}
+                  </div>
+                  <span className="flex min-w-0 flex-1 flex-col gap-1">
+                    <span className="text-xs font-medium">{statusLabel(job)}</span>
+                    <span className="line-clamp-2 text-xs leading-relaxed text-muted-foreground">
+                      {jobListPrompt(job)}
+                    </span>
+                    <span className="font-mono text-[11px] tabular-nums text-muted-foreground">
+                      {jobListMeta(job).join(" · ")}
+                    </span>
+                  </span>
+                </button>
+                {selecting ? null : (
+                  <DropdownMenu>
+                    <DropdownMenuTrigger asChild>
+                      <Button
+                        type="button"
+                        size="icon-sm"
+                        variant="ghost"
+                        className="mt-0.5 shrink-0"
+                        aria-label="任务菜单"
+                      >
+                        <EllipsisVerticalIcon />
+                      </Button>
+                    </DropdownMenuTrigger>
+                    <DropdownMenuContent align="end" className="w-auto min-w-36">
+                      <DropdownMenuItem onSelect={() => onSelect(job)}>
+                        打开
+                      </DropdownMenuItem>
+                      {busy ? null : (
+                        <DropdownMenuItem
+                          variant="destructive"
+                          onSelect={() => onDelete(job)}
+                        >
+                          删除
+                        </DropdownMenuItem>
+                      )}
+                    </DropdownMenuContent>
+                  </DropdownMenu>
+                )}
+              </div>
+            </li>
+          )
+        })}
+      </ul>
+    </div>
   )
 }

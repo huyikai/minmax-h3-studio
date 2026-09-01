@@ -28,6 +28,10 @@ export function jobsPath() {
   return path.join(dataDir(), "jobs.json")
 }
 
+export function queueStatePath() {
+  return path.join(dataDir(), "queue.json")
+}
+
 export function jobOutputDir(jobId: string) {
   return path.join(outputsDir(), jobId)
 }
