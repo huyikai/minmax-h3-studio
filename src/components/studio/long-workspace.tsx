@@ -3,6 +3,16 @@
 import { useEffect, useMemo, useState } from "react"
 import { PlayIcon } from "lucide-react"
 import { Button } from "@/components/ui/button"
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+} from "@/components/ui/alert-dialog"
 import { Textarea } from "@/components/ui/textarea"
 import { Input } from "@/components/ui/input"
 import { Switch } from "@/components/ui/switch"
@@ -97,6 +107,8 @@ export function LongWorkspace({
   const [seed, setSeed] = useState(randomSeed())
   const [randomize, setRandomize] = useState(true)
   const [redoIndex, setRedoIndex] = useState<number | null>(null)
+  const [redoConfirmIndex, setRedoConfirmIndex] = useState<number | null>(null)
+  const [redoSubmitOpen, setRedoSubmitOpen] = useState(false)
 
   useEffect(() => {
     setLockPrompt(job.long?.lockPrompt ?? "")
@@ -128,6 +140,43 @@ export function LongWorkspace({
       prev.trim() === completedPrompt.trim() ? "" : prev
     )
   }, [lastSuccess?.index, lastSuccess?.status, lastSuccess?.prompt, retry?.index, queuedNext, busy, finalized, onPromptChange])
+
+  const redoConfirmTail = (long?.segments ?? []).filter(
+    (item) =>
+      redoConfirmIndex !== null &&
+      item.index > redoConfirmIndex &&
+      item.status === "success"
+  ).length
+  const redoSubmitTail = (long?.segments ?? []).filter(
+    (item) =>
+      redoIndex !== null &&
+      item.index > redoIndex &&
+      item.status === "success"
+  ).length
+
+  function beginRedo(index: number) {
+    const segment = (long?.segments ?? []).find((item) => item.index === index)
+    if (!segment) return
+    setRedoIndex(index)
+    onPromptChange(segment.prompt)
+    setDuration(String(segment.duration))
+    setSeed(segment.seed)
+    setRandomize(false)
+    setRedoConfirmIndex(null)
+  }
+
+  function submitGenerate() {
+    const nextSeed = randomize ? randomSeed() : seed
+    if (randomize) setSeed(nextSeed)
+    onGenerate({
+      prompt,
+      duration: Number(duration),
+      aspect,
+      seed: nextSeed,
+      lockPrompt,
+      redoIndex: redoIndex ?? undefined,
+    })
+  }
 
   const submittedPreview = useMemo(
     () => mergeLockIntoPrompt(lockPrompt, prompt),
@@ -189,13 +238,7 @@ export function LongWorkspace({
                         type="button"
                         size="sm"
                         variant="ghost"
-                        onClick={() => {
-                          setRedoIndex(segment.index)
-                          onPromptChange(segment.prompt)
-                          setDuration(String(segment.duration))
-                          setSeed(segment.seed)
-                          setRandomize(false)
-                        }}
+                        onClick={() => setRedoConfirmIndex(segment.index)}
                       >
                         重做
                       </Button>
@@ -350,26 +393,10 @@ export function LongWorkspace({
                 disabled={generateDisabled}
                 onClick={() => {
                   if (redoIndex) {
-                    const tail = (long?.segments ?? []).some(
-                      (item) => item.index > redoIndex && item.status === "success"
-                    )
-                    if (tail) {
-                      const ok = window.confirm(
-                        `重做第 ${redoIndex} 段会作废后面所有段。确定吗？`
-                      )
-                      if (!ok) return
-                    }
+                    setRedoSubmitOpen(true)
+                    return
                   }
-                  const nextSeed = randomize ? randomSeed() : seed
-                  if (randomize) setSeed(nextSeed)
-                  onGenerate({
-                    prompt,
-                    duration: Number(duration),
-                    aspect,
-                    seed: nextSeed,
-                    lockPrompt,
-                    redoIndex: redoIndex ?? undefined,
-                  })
+                  submitGenerate()
                 }}
               >
                 {submitting ? (
@@ -407,6 +434,64 @@ export function LongWorkspace({
           )}
         </div>
       </div>
+
+      <AlertDialog
+        open={redoConfirmIndex !== null}
+        onOpenChange={(open) => {
+          if (!open) setRedoConfirmIndex(null)
+        }}
+      >
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>
+              {redoConfirmIndex ? `重做第 ${redoConfirmIndex} 段？` : "重做这一段？"}
+            </AlertDialogTitle>
+            <AlertDialogDescription>
+              {redoConfirmTail > 0
+                ? `会作废后面 ${redoConfirmTail} 段已成功的成片，它们不再进这条链。潜变量文件可能还在，但不能接着用。`
+                : `将用新生成替换第 ${redoConfirmIndex ?? ""} 段。点确定后仍可改提示词，再点生成才会提交。`}
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel>取消</AlertDialogCancel>
+            <AlertDialogAction
+              variant="destructive"
+              onClick={() => {
+                if (redoConfirmIndex) beginRedo(redoConfirmIndex)
+              }}
+            >
+              确定重做
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
+
+      <AlertDialog open={redoSubmitOpen} onOpenChange={setRedoSubmitOpen}>
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>
+              {redoIndex ? `提交重做第 ${redoIndex} 段？` : "提交重做？"}
+            </AlertDialogTitle>
+            <AlertDialogDescription>
+              {redoSubmitTail > 0
+                ? `提交后会作废后面 ${redoSubmitTail} 段。此操作不能从列表里撤销。`
+                : "提交后会按当前提示词重新生成这一段，替换现有成片。"}
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel>取消</AlertDialogCancel>
+            <AlertDialogAction
+              variant="destructive"
+              onClick={() => {
+                setRedoSubmitOpen(false)
+                submitGenerate()
+              }}
+            >
+              确定提交
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
     </div>
   )
 }

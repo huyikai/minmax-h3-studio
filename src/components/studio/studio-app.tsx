@@ -818,16 +818,11 @@ export function StudioApp() {
   )
 
   return (
-    <div className="flex min-h-[100dvh] flex-col">
-      <header className="relative z-10 flex min-h-14 flex-wrap items-center justify-between gap-3 border-b px-4 py-2.5 lg:px-5">
-        <div className="flex min-w-0 items-center gap-3">
-          <span className="h-7 w-1 shrink-0 rounded-full bg-primary" aria-hidden="true" />
-          <div className="min-w-0">
-            <h1 className="font-heading text-lg font-semibold tracking-tight text-pretty">
-              MiniMax H3 Studio
-            </h1>
-          </div>
-        </div>
+    <div className="flex h-dvh flex-col overflow-hidden">
+      <header className="relative z-20 flex min-h-14 shrink-0 flex-wrap items-center justify-between gap-3 border-b bg-background px-4 py-2.5 lg:px-5">
+        <h1 className="min-w-0 font-heading text-lg font-semibold tracking-tight text-pretty">
+          MiniMax H3 Studio
+        </h1>
         <div className="flex flex-wrap items-center gap-2">
           <span className="flex items-center gap-2 rounded-md border bg-card px-2.5 py-1.5 font-mono text-[11px] tabular-nums">
             <span
@@ -868,10 +863,10 @@ export function StudioApp() {
       </header>
 
       {shell === "home" ? (
-        <div id="studio-main" className="flex flex-1 flex-col">
-          <section className="mx-auto flex w-full max-w-3xl flex-1 flex-col gap-4 p-4">
+        <div id="studio-main" className="flex min-h-0 flex-1 flex-col overflow-hidden">
+          <section className="mx-auto flex min-h-0 w-full max-w-3xl flex-1 flex-col gap-4 overflow-hidden p-4">
             {!connected ? (
-              <Alert>
+              <Alert className="shrink-0">
                 <AlertTitle>还没有连上 ComfyUI</AlertTitle>
                 <AlertDescription>
                   请在本机启动 ComfyUI（默认 8188），然后再生成。Studio
@@ -880,7 +875,7 @@ export function StudioApp() {
               </Alert>
             ) : null}
             {workflows.length === 0 ? (
-              <Empty className="border bg-card/40">
+              <Empty className="shrink-0 border bg-card/40">
                 <EmptyHeader>
                   <EmptyMedia variant="icon">
                     <ClapperboardIcon />
@@ -903,7 +898,7 @@ export function StudioApp() {
                 </EmptyContent>
               </Empty>
             ) : (
-              <div className="grid grid-cols-1 gap-2 sm:grid-cols-2">
+              <div className="grid shrink-0 grid-cols-1 gap-2 sm:grid-cols-2">
                 <Button
                   type="button"
                   size="lg"
@@ -925,30 +920,26 @@ export function StudioApp() {
                 </Button>
               </div>
             )}
-            <div className="min-h-0 flex-1 overflow-y-auto">
-              <div className="flex flex-col gap-4">
-                <QueuePanel
-                  queue={queue}
-                  jobs={jobs}
-                  onOpen={(job) => void openJob(job)}
-                  onResume={() => void resumeQueue()}
-                  onWithdraw={(job) => void withdrawQueueItem(job)}
-                />
-                <TaskList
-                  jobs={jobs}
-                  currentId={current?.id}
-                  onSelect={(job) => void openJob(job)}
-                  onDelete={(job) => setDeleteTargets([job])}
-                  onDeleteMany={setDeleteTargets}
-                />
-              </div>
-            </div>
+            <QueuePanel
+              queue={queue}
+              jobs={jobs}
+              onOpen={(job) => void openJob(job)}
+              onResume={() => void resumeQueue()}
+              onWithdraw={(job) => void withdrawQueueItem(job)}
+            />
+            <TaskList
+              jobs={jobs}
+              currentId={current?.id}
+              onSelect={(job) => void openJob(job)}
+              onDelete={(job) => setDeleteTargets([job])}
+              onDeleteMany={setDeleteTargets}
+            />
           </section>
         </div>
       ) : (
         <div
           id="studio-main"
-          className="grid flex-1 grid-cols-1 lg:grid-cols-[minmax(22rem,28rem)_minmax(0,1fr)]"
+          className="grid min-h-0 flex-1 grid-cols-1 overflow-hidden lg:grid-cols-[minmax(22rem,28rem)_minmax(0,1fr)]"
         >
           <section className="relative flex min-h-0 flex-col border-b lg:max-h-[calc(100dvh-3.75rem)] lg:border-r lg:border-b-0">
             <div className="flex shrink-0 items-center gap-2 border-b px-3 py-2">

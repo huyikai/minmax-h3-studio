@@ -74,7 +74,7 @@ export function TaskList({
 
   if (jobs.length === 0) {
     return (
-      <Empty className="rounded-xl border bg-card/40 py-10">
+      <Empty className="min-h-0 flex-1 rounded-xl border bg-card/40 py-10">
         <EmptyHeader>
           <EmptyTitle>还没有任务</EmptyTitle>
           <EmptyDescription>{emptyHint}</EmptyDescription>
@@ -84,8 +84,8 @@ export function TaskList({
   }
 
   return (
-    <div className="flex flex-col gap-2">
-      <div className="flex items-center justify-between gap-2">
+    <div className="flex min-h-0 flex-1 flex-col gap-2">
+      <div className="flex shrink-0 items-center justify-between gap-2 bg-background py-0.5">
         {selecting ? (
           <>
             <Button type="button" size="sm" variant="ghost" onClick={exitSelect}>
@@ -126,7 +126,7 @@ export function TaskList({
           </>
         )}
       </div>
-      <ul className="flex flex-col gap-2">
+      <ul className="flex min-h-0 flex-1 flex-col gap-2 overflow-y-auto overscroll-contain pb-1">
         {jobs.map((job) => {
           const isSelected = selected.has(job.id)
           const current = currentId === job.id

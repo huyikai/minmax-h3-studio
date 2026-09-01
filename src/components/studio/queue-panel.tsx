@@ -21,7 +21,7 @@ export function QueuePanel({
   if (queue.items.length === 0) return null
 
   return (
-    <section className="rounded-xl border bg-card/60 p-3">
+    <section className="max-h-[min(12rem,30vh)] shrink-0 overflow-y-auto overscroll-contain rounded-xl border bg-card/60 p-3">
       <div className="mb-2 flex items-center justify-between gap-2">
         <div className="flex min-w-0 items-center gap-2">
           <ListOrderedIcon className="size-4 text-muted-foreground" />
