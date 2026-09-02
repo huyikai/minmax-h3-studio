@@ -6,7 +6,7 @@ import { Button } from "@/components/ui/button"
 import { Progress } from "@/components/ui/progress"
 import { Spinner } from "@/components/ui/spinner"
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert"
-import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs"
+import { ToggleGroup, ToggleGroupItem } from "@/components/ui/toggle-group"
 import { isBusyJob, isLongJob, isWaitingJob, statusLabel } from "@/lib/job-view"
 import {
   displayNodeTitle,
@@ -60,6 +60,98 @@ function useTickingNow(enabled: boolean) {
   return now
 }
 
+function longStripPhase(job: PublicJob) {
+  if (isWaitingJob(job)) return "waiting" as const
+  if (job.status === "queued") return "queued" as const
+  if (job.status === "running") return "running" as const
+  if (job.status === "error") return "error" as const
+  if (job.status === "interrupted") return "interrupted" as const
+  const retry = retryableSegment(job.long)
+  if (retry?.status === "interrupted") return "interrupted" as const
+  if (retry?.status === "error") return "error" as const
+  return null
+}
+
+function ProgressBody({
+  job,
+  now,
+  phase,
+}: {
+  job: PublicJob
+  now: number
+  phase: "waiting" | "queued" | "running"
+}) {
+  const percent = progressPercent(job.progress)
+  const hasSteps = Boolean(job.progress?.max)
+  const nodeLabel = displayNodeTitle(job.progress?.nodeTitle)
+  const headline = hasSteps
+    ? nodeLabel
+    : nodeLabel === "正在执行"
+      ? "模型加载或排队中"
+      : nodeLabel
+
+  if (phase === "waiting") {
+    return (
+      <div className="flex flex-col gap-1">
+        <p className="text-sm font-medium">已在 Studio 队列</p>
+        <MetaBits items={monitorTimingItems(job, "waiting", now)} />
+        <p className="text-xs text-muted-foreground">
+          等 ComfyUI 空闲后会按顺序开跑。参数已冻结，不能改。
+        </p>
+      </div>
+    )
+  }
+
+  return (
+    <div className="flex flex-col gap-2">
+      <div className="flex flex-wrap items-center gap-3">
+        <Spinner className="size-4 text-primary" />
+        <p className="text-sm text-muted-foreground">{headline}</p>
+        {percent != null ? (
+          <p className="font-mono text-sm tabular-nums tracking-tight">{percent}%</p>
+        ) : null}
+        {hasSteps ? (
+          <p className="font-mono text-xs tabular-nums text-muted-foreground">
+            {job.progress?.value ?? 0} / {job.progress?.max}
+          </p>
+        ) : nodeLabel !== "正在执行" ? (
+          <p className="text-xs text-muted-foreground">模型加载或排队中</p>
+        ) : null}
+      </div>
+      <Progress value={percent} className="h-2 w-full" />
+      <MetaBits
+        items={monitorTimingItems(
+          job,
+          phase === "queued" ? "queued" : "running",
+          now
+        )}
+      />
+    </div>
+  )
+}
+
+function FailureBody({
+  job,
+  now,
+  interrupted,
+}: {
+  job: PublicJob
+  now: number
+  interrupted: boolean
+}) {
+  return (
+    <div className="flex flex-col gap-2">
+      <Alert variant={interrupted ? "default" : "destructive"}>
+        <AlertTitle>{interrupted ? "已中断" : "生成失败"}</AlertTitle>
+        <AlertDescription>
+          {job.error ?? (interrupted ? "这次生成已停下。" : "生成失败")}
+        </AlertDescription>
+      </Alert>
+      <MetaBits items={monitorTimingItems(job, "failed", now)} />
+    </div>
+  )
+}
+
 export type MonitorMode = "current" | "stitched"
 
 export function MonitorPanel({
@@ -69,6 +161,8 @@ export function MonitorPanel({
   duration,
   mode,
   onModeChange,
+  pastSegmentIndex,
+  onPastSegmentIndexChange,
   onInterrupt,
   onRetryStitch,
   emptyHint,
@@ -79,26 +173,38 @@ export function MonitorPanel({
   duration: string
   mode: MonitorMode
   onModeChange: (mode: MonitorMode) => void
+  pastSegmentIndex?: number | null
+  onPastSegmentIndexChange?: (index: number) => void
   onInterrupt?: () => void
   onRetryStitch?: () => void
   emptyHint: string
 }) {
-  const ticking = Boolean(
-    job && (busy || isWaitingJob(job))
-  )
+  const ticking = Boolean(job && (busy || isWaitingJob(job)))
   const now = useTickingNow(ticking)
   const long = Boolean(job && isLongJob(job))
-  const canStitch = Boolean(job && successfulSegments(job.long).length > 0)
+  const successes = job ? successfulSegments(job.long) : []
+  const showStitchTab = long && successes.length >= 2
   const last = job ? lastSuccessfulSegment(job.long) : undefined
   const active = job ? activeLongSegment(job.long) : undefined
   const retryable = job ? retryableSegment(job.long) : undefined
-  const currentUrl = long ? last?.outputUrl ?? job?.previewUrl : job?.outputUrl
-  const showStitched = long && mode === "stitched"
+  const selectedPast =
+    successes.find((item) => item.index === pastSegmentIndex) ?? last
+  const showStitched = Boolean(showStitchTab && mode === "stitched")
+  const currentUrl = long
+    ? selectedPast?.outputUrl ?? job?.previewUrl
+    : job?.outputUrl
   const videoUrl = showStitched ? job?.stitchedUrl : currentUrl
-  const showSuccessVideo = Boolean(videoUrl) && !busy && job?.status !== "error"
-  const showError = job?.status === "error" && !busy && !showStitched
+  const stripPhase = long && job ? longStripPhase(job) : null
+  const showSuccessVideo = long
+    ? Boolean(videoUrl)
+    : Boolean(videoUrl) && !busy && job?.status !== "error"
+  const showError = !long && job?.status === "error" && !busy && !showStitched
   const showInterrupted =
-    job?.status === "interrupted" && !busy && !showStitched && !showSuccessVideo
+    !long &&
+    job?.status === "interrupted" &&
+    !busy &&
+    !showStitched &&
+    !showSuccessVideo
   const percent = busy ? progressPercent(job?.progress) : undefined
   const hasSteps = Boolean(job?.progress?.max)
   const nodeLabel = displayNodeTitle(job?.progress?.nodeTitle)
@@ -111,13 +217,15 @@ export function MonitorPanel({
     ? `第 ${active.index} 段`
     : retryable
       ? `第 ${retryable.index} 段`
-      : last
-        ? `第 ${last.index} 段`
-        : "还没有段"
+      : selectedPast
+        ? `第 ${selectedPast.index} 段`
+        : last
+          ? `第 ${last.index} 段`
+          : "还没有段"
   const headerTiming =
-    job && !busy && retryable
-      ? monitorTimingItems(job, "failed", now).filter((item) =>
-          item.startsWith("本段") || item.startsWith("累计")
+    job && !long && !busy && retryable
+      ? monitorTimingItems(job, "failed", now).filter(
+          (item) => item.startsWith("本段") || item.startsWith("累计")
         )
       : []
 
@@ -126,16 +234,23 @@ export function MonitorPanel({
       <div className="flex items-center justify-between gap-3 border-b px-4 py-2.5">
         <div className="flex min-w-0 items-center gap-3">
           <span className="text-sm font-medium">成片</span>
-          {long && canStitch ? (
-            <Tabs
-              value={mode}
-              onValueChange={(value) => onModeChange(value as MonitorMode)}
+          {showStitchTab ? (
+            <ToggleGroup
+              type="single"
+              variant="outline"
+              size="sm"
+              aria-label="成片视图"
+              value={mode === "stitched" ? "stitched" : "current"}
+              onValueChange={(value) => {
+                if (!value) return
+                onModeChange(value as MonitorMode)
+              }}
             >
-              <TabsList variant="line">
-                <TabsTrigger value="current">当前段</TabsTrigger>
-                <TabsTrigger value="stitched">已拼接</TabsTrigger>
-              </TabsList>
-            </Tabs>
+              <ToggleGroupItem value="current">过往段</ToggleGroupItem>
+              <ToggleGroupItem value="stitched">已拼接</ToggleGroupItem>
+            </ToggleGroup>
+          ) : long && successes.length > 0 ? (
+            <span className="text-xs text-muted-foreground">过往段</span>
           ) : null}
         </div>
         <div className="flex min-w-0 items-center gap-2">
@@ -165,12 +280,47 @@ export function MonitorPanel({
           ) : null}
         </div>
       </div>
+      {stripPhase && job ? (
+        <div className="border-b px-4 py-3" aria-busy={busy} aria-live="polite">
+          {stripPhase === "error" || stripPhase === "interrupted" ? (
+            <FailureBody
+              job={job}
+              now={now}
+              interrupted={stripPhase === "interrupted"}
+            />
+          ) : (
+            <ProgressBody job={job} now={now} phase={stripPhase} />
+          )}
+        </div>
+      ) : null}
+      {!showStitched && successes.length > 1 ? (
+        <div className="flex overflow-x-auto border-b px-4 py-2">
+          <ToggleGroup
+            type="single"
+            variant="outline"
+            size="sm"
+            aria-label="过往段"
+            className="max-w-full"
+            value={selectedPast ? String(selectedPast.index) : ""}
+            onValueChange={(value) => {
+              if (!value) return
+              onPastSegmentIndexChange?.(Number(value))
+            }}
+          >
+            {successes.map((item) => (
+              <ToggleGroupItem key={item.index} value={String(item.index)}>
+                第 {item.index} 段
+              </ToggleGroupItem>
+            ))}
+          </ToggleGroup>
+        </div>
+      ) : null}
       <div
         className={cn(
           "relative flex min-h-64 flex-1 items-center justify-center studio-letterbox",
-          busy && "studio-scan"
+          !long && busy && "studio-scan"
         )}
-        aria-busy={busy}
+        aria-busy={!long && busy}
         aria-live="polite"
       >
         {showStitched && job?.long?.stitchError && !job.stitchedUrl ? (
@@ -199,7 +349,7 @@ export function MonitorPanel({
             controls
             autoPlay
           />
-        ) : busy && job ? (
+        ) : !long && busy && job ? (
           <div className="relative z-10 flex w-full max-w-md flex-col items-center gap-4 p-8 text-center">
             <Spinner className="size-8 text-primary" />
             <div className="flex flex-col items-center gap-1">
@@ -229,7 +379,7 @@ export function MonitorPanel({
               />
             </div>
           </div>
-        ) : job && isWaitingJob(job) ? (
+        ) : !long && job && isWaitingJob(job) ? (
           <div className="flex w-full max-w-xl flex-col items-center justify-center gap-3 p-8 text-center">
             <p className="text-sm font-medium">已在 Studio 队列</p>
             <MetaBits

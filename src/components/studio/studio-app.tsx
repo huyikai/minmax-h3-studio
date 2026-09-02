@@ -65,7 +65,7 @@ import {
 import { resolveGuideMode } from "@/lib/prompt-guide"
 import { normalizeLora } from "@/lib/lora"
 import { isBusyJob, isLongJob, isWaitingJob } from "@/lib/job-view"
-import { waitingSegment } from "@/lib/long-video"
+import { lastSuccessfulSegment, successfulSegments, waitingSegment } from "@/lib/long-video"
 import { cn } from "@/lib/utils"
 
 function emptyQueue(): StudioQueueSnapshot {
@@ -131,6 +131,9 @@ export function StudioApp() {
   const [guideOpen, setGuideOpen] = useState(false)
   const [guidePinned, setGuidePinned] = useState(false)
   const [monitorMode, setMonitorMode] = useState<MonitorMode>("current")
+  const [pastSegmentIndex, setPastSegmentIndex] = useState<number | null>(null)
+  const lastSuccessIndexRef = useRef<number | undefined>(undefined)
+  const pastJobIdRef = useRef<string | null>(null)
   const [booting, setBooting] = useState(true)
   const [healthBusy, setHealthBusy] = useState(false)
 
@@ -382,6 +385,49 @@ export function StudioApp() {
     }
   }, [loadBundle, loadHealth, loadJobs, loadSettings, loadWorkflows])
 
+  useEffect(() => {
+    const job = workspaceJobId
+      ? jobs.find((item) => item.id === workspaceJobId) ?? current
+      : current
+    if (!job || !isLongJob(job)) return
+    const lastIndex = lastSuccessfulSegment(job.long)?.index
+    const successIndexes = new Set(
+      successfulSegments(job.long).map((item) => item.index)
+    )
+    if (pastJobIdRef.current !== job.id) {
+      pastJobIdRef.current = job.id
+      lastSuccessIndexRef.current = lastIndex
+      setPastSegmentIndex(lastIndex ?? null)
+      return
+    }
+    if (lastIndex == null) {
+      lastSuccessIndexRef.current = undefined
+      setPastSegmentIndex(null)
+      return
+    }
+    const prev = lastSuccessIndexRef.current
+    lastSuccessIndexRef.current = lastIndex
+    if (prev != null && lastIndex > prev) {
+      setPastSegmentIndex(lastIndex)
+      return
+    }
+    setPastSegmentIndex((currentIndex) => {
+      if (currentIndex == null) return lastIndex
+      if (!successIndexes.has(currentIndex)) return lastIndex
+      return currentIndex
+    })
+  }, [workspaceJobId, jobs, current])
+
+  useEffect(() => {
+    const job = workspaceJobId
+      ? jobs.find((item) => item.id === workspaceJobId) ?? current
+      : current
+    if (!job || !isLongJob(job)) return
+    if (successfulSegments(job.long).length < 2 && monitorMode === "stitched") {
+      setMonitorMode("current")
+    }
+  }, [workspaceJobId, jobs, current, monitorMode])
+
   function setSlotFile(slotId: string, file: File | null) {
     setSlotFiles((previous) => {
       const next = { ...previous }
@@ -429,6 +475,9 @@ export function StudioApp() {
     setGuidePinned(false)
     setWorkspaceJobId(null)
     setMonitorMode("current")
+    setPastSegmentIndex(null)
+    lastSuccessIndexRef.current = undefined
+    pastJobIdRef.current = null
   }
 
   function enterWorkspace(next: Shell, job: PublicJob | null) {
@@ -436,6 +485,9 @@ export function StudioApp() {
     setWorkspaceJobId(job?.id ?? null)
     setCurrent(job)
     setMonitorMode("current")
+    setPastSegmentIndex(lastSuccessfulSegment(job?.long)?.index ?? null)
+    lastSuccessIndexRef.current = lastSuccessfulSegment(job?.long)?.index
+    pastJobIdRef.current = job?.id ?? null
     setGuideOpen(false)
     setGuidePinned(false)
     if (next === "long") setPrompt("")
@@ -1060,6 +1112,11 @@ export function StudioApp() {
                     submitting={submitting}
                     prompt={prompt}
                     textareaRef={textareaRef}
+                    pastSegmentIndex={pastSegmentIndex}
+                    onViewSegment={(index) => {
+                      setPastSegmentIndex(index)
+                      setMonitorMode("current")
+                    }}
                     onPromptChange={setPrompt}
                     onPromptFocus={() => setGuideOpen(true)}
                     onGenerate={(payload) => submitLong(payload)}
@@ -1156,6 +1213,11 @@ export function StudioApp() {
               duration={liveJob ? String(liveJob.duration) : duration}
               mode={monitorMode}
               onModeChange={setMonitorMode}
+              pastSegmentIndex={pastSegmentIndex}
+              onPastSegmentIndexChange={(index) => {
+                setPastSegmentIndex(index)
+                setMonitorMode("current")
+              }}
               onInterrupt={
                 liveJob && isBusyJob(liveJob)
                   ? () => {
@@ -1166,7 +1228,7 @@ export function StudioApp() {
               onRetryStitch={() => void retryStitch()}
               emptyHint={
                 shell === "long"
-                  ? "写好这一段后生成。监视器默认看当前段，也可切到已拼接。"
+                  ? "写好这一段后生成。过往段可回看已完成的镜，两段成功后可看已拼接。"
                   : "写好提示词后生成。进度走 ComfyUI 的 websocket，成片会复制到 outputs/ 目录。"
               }
             />

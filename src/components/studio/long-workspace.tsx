@@ -62,6 +62,32 @@ function segmentStatusLabel(status: string) {
   }
 }
 
+function SegmentSummary({
+  index,
+  duration,
+  seed,
+  status,
+  prompt,
+}: {
+  index: number
+  duration: number
+  seed: number
+  status: string
+  prompt: string
+}) {
+  return (
+    <>
+      <span className="font-mono text-[11px] tabular-nums text-muted-foreground">
+        第 {index} 段 · {duration}s · seed {seed}
+      </span>
+      <span className="mt-0.5 block text-xs">{segmentStatusLabel(status)}</span>
+      <span className="mt-1 line-clamp-2 text-xs text-muted-foreground">
+        {prompt || "（无提示词）"}
+      </span>
+    </>
+  )
+}
+
 export type LongGeneratePayload = {
   prompt: string
   duration: number
@@ -76,6 +102,8 @@ export function LongWorkspace({
   submitting,
   prompt,
   textareaRef,
+  pastSegmentIndex,
+  onViewSegment,
   onPromptChange,
   onPromptFocus,
   onGenerate,
@@ -86,6 +114,8 @@ export function LongWorkspace({
   submitting: boolean
   prompt: string
   textareaRef: React.RefObject<HTMLTextAreaElement | null>
+  pastSegmentIndex?: number | null
+  onViewSegment?: (index: number) => void
   onPromptChange: (value: string | ((prev: string) => string)) => void
   onPromptFocus?: () => void
   onGenerate: (payload: LongGeneratePayload) => Promise<boolean>
@@ -209,7 +239,7 @@ export function LongWorkspace({
 
           <Field>
             <LabelWithHelp label="已生成的段">
-              不能跳段。重做某一段会作废它后面的段，潜变量文件可能还在，但不进这条链。
+              点已完成的段可在监视器过往段回看。重做某一段会作废它后面的段，潜变量文件可能还在，但不进这条链。
             </LabelWithHelp>
             <ul className="flex flex-col gap-1.5">
               {(long?.segments ?? []).length === 0 ? (
@@ -222,20 +252,37 @@ export function LongWorkspace({
                     key={segment.index}
                     className={cn(
                       "flex items-start justify-between gap-2 rounded-md border px-3 py-2",
-                      segment.status === "voided" && "opacity-50"
+                      segment.status === "voided" && "opacity-50",
+                      segment.status === "success" &&
+                        pastSegmentIndex === segment.index &&
+                        "border-primary/70 bg-primary/10"
                     )}
                   >
-                    <span className="min-w-0">
-                      <span className="font-mono text-[11px] tabular-nums text-muted-foreground">
-                        第 {segment.index} 段 · {segment.duration}s · seed {segment.seed}
+                    {segment.status === "success" && onViewSegment ? (
+                      <button
+                        type="button"
+                        className="min-w-0 flex-1 text-left"
+                        onClick={() => onViewSegment(segment.index)}
+                      >
+                        <SegmentSummary
+                          index={segment.index}
+                          duration={segment.duration}
+                          seed={segment.seed}
+                          status={segment.status}
+                          prompt={segment.prompt}
+                        />
+                      </button>
+                    ) : (
+                      <span className="min-w-0">
+                        <SegmentSummary
+                          index={segment.index}
+                          duration={segment.duration}
+                          seed={segment.seed}
+                          status={segment.status}
+                          prompt={segment.prompt}
+                        />
                       </span>
-                      <span className="mt-0.5 block text-xs">
-                        {segmentStatusLabel(segment.status)}
-                      </span>
-                      <span className="mt-1 line-clamp-2 text-xs text-muted-foreground">
-                        {segment.prompt || "（无提示词）"}
-                      </span>
-                    </span>
+                    )}
                     {segment.status === "success" && !busy && !queuedNext && !finalized ? (
                       <Button
                         type="button"

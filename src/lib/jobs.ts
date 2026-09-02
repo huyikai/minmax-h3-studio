@@ -2,7 +2,7 @@ import fs from "node:fs/promises"
 import path from "node:path"
 import type { Job, LongSegment, PublicJob } from "@/lib/types"
 import { dataDir, jobOutputDir, jobsPath } from "@/lib/paths"
-import { lastSuccessfulSegment } from "@/lib/long-video"
+import { lastSuccessfulSegment, successfulSegments } from "@/lib/long-video"
 
 async function ensure() {
   await fs.mkdir(dataDir(), { recursive: true })
@@ -95,11 +95,16 @@ function outputUrl(jobId: string, file: string | undefined, bust: string) {
   return `/api/outputs/${jobId}/${path.basename(file)}?t=${encodeURIComponent(bust)}`
 }
 
-function publicSegment(jobId: string, segment: LongSegment, bust: string): LongSegment {
+function segmentMediaBust(segment: LongSegment) {
+  const file = segment.outputFile ? path.basename(segment.outputFile) : ""
+  return `${segment.index}:${segment.startedAt ?? ""}:${segment.runElapsedMs ?? ""}:${file}`
+}
+
+function publicSegment(jobId: string, segment: LongSegment): LongSegment {
   return {
     ...segment,
     outputFile: segment.outputFile ? path.basename(segment.outputFile) : undefined,
-    outputUrl: outputUrl(jobId, segment.outputFile, bust),
+    outputUrl: outputUrl(jobId, segment.outputFile, segmentMediaBust(segment)),
   }
 }
 
@@ -115,6 +120,10 @@ export function toPublicJob(job: Job): PublicJob {
       : previewFile
   const rest = { ...job }
   delete rest.inputMedia
+  const stitchBust = successfulSegments(job.long)
+    .map(segmentMediaBust)
+    .join("|")
+  const previewBust = lastSuccess ? segmentMediaBust(lastSuccess) : bust
 
   return {
     ...rest,
@@ -123,9 +132,15 @@ export function toPublicJob(job: Job): PublicJob {
     submittedWorkflowFile: job.submittedWorkflowFile
       ? "workflow.json"
       : undefined,
-    previewUrl: outputUrl(job.id, previewFile, bust),
-    stitchedUrl: outputUrl(job.id, stitchedFile, bust),
-    outputUrl: outputUrl(job.id, outputFile, bust),
+    previewUrl: outputUrl(job.id, previewFile, previewBust),
+    stitchedUrl: outputUrl(job.id, stitchedFile, stitchBust || bust),
+    outputUrl: outputUrl(
+      job.id,
+      outputFile,
+      kind === "long" && job.long?.finalized
+        ? stitchBust || previewBust
+        : previewBust
+    ),
     workflowUrl: `/api/jobs/${job.id}/workflow`,
     long: job.long
       ? {
@@ -134,7 +149,7 @@ export function toPublicJob(job: Job): PublicJob {
             ? path.basename(job.long.stitchedFile)
             : undefined,
           segments: job.long.segments.map((segment) =>
-            publicSegment(job.id, segment, bust)
+            publicSegment(job.id, segment)
           ),
         }
       : undefined,
