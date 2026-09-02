@@ -1,21 +1,42 @@
 "use client"
 
+import { useEffect, useState } from "react"
 import { DownloadIcon, SquareIcon } from "lucide-react"
 import { Button } from "@/components/ui/button"
 import { Progress } from "@/components/ui/progress"
+import { Spinner } from "@/components/ui/spinner"
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert"
 import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs"
 import { isBusyJob, isLongJob, isWaitingJob, statusLabel } from "@/lib/job-view"
 import {
+  displayNodeTitle,
+  monitorTimingItems,
+  progressPercent,
+} from "@/lib/job-timing"
+import {
+  activeLongSegment,
   lastSuccessfulSegment,
+  retryableSegment,
   successfulSegments,
 } from "@/lib/long-video"
 import type { PublicJob } from "@/lib/types"
 import { cn } from "@/lib/utils"
 
-function MetaBits({ items }: { items: string[] }) {
+function MetaBits({
+  items,
+  className,
+}: {
+  items: string[]
+  className?: string
+}) {
+  if (items.length === 0) return null
   return (
-    <span className="flex flex-wrap items-center gap-2 font-mono text-[11px] tabular-nums tracking-tight text-muted-foreground">
+    <span
+      className={cn(
+        "flex flex-wrap items-center gap-2 font-mono text-[11px] tabular-nums tracking-tight text-muted-foreground",
+        className
+      )}
+    >
       {items.map((item, index) => (
         <span key={`${item}-${index}`} className="flex items-center gap-2">
           {index > 0 ? (
@@ -28,12 +49,22 @@ function MetaBits({ items }: { items: string[] }) {
   )
 }
 
+function useTickingNow(enabled: boolean) {
+  const [now, setNow] = useState(() => Date.now())
+  useEffect(() => {
+    if (!enabled) return
+    setNow(Date.now())
+    const timer = window.setInterval(() => setNow(Date.now()), 1000)
+    return () => window.clearInterval(timer)
+  }, [enabled])
+  return now
+}
+
 export type MonitorMode = "current" | "stitched"
 
 export function MonitorPanel({
   job,
   busy,
-  progressPercent,
   aspect,
   duration,
   mode,
@@ -44,7 +75,6 @@ export function MonitorPanel({
 }: {
   job: PublicJob | null
   busy: boolean
-  progressPercent: number
   aspect: string
   duration: string
   mode: MonitorMode
@@ -53,14 +83,43 @@ export function MonitorPanel({
   onRetryStitch?: () => void
   emptyHint: string
 }) {
+  const ticking = Boolean(
+    job && (busy || isWaitingJob(job))
+  )
+  const now = useTickingNow(ticking)
   const long = Boolean(job && isLongJob(job))
   const canStitch = Boolean(job && successfulSegments(job.long).length > 0)
   const last = job ? lastSuccessfulSegment(job.long) : undefined
+  const active = job ? activeLongSegment(job.long) : undefined
+  const retryable = job ? retryableSegment(job.long) : undefined
   const currentUrl = long ? last?.outputUrl ?? job?.previewUrl : job?.outputUrl
   const showStitched = long && mode === "stitched"
   const videoUrl = showStitched ? job?.stitchedUrl : currentUrl
   const showSuccessVideo = Boolean(videoUrl) && !busy && job?.status !== "error"
   const showError = job?.status === "error" && !busy && !showStitched
+  const showInterrupted =
+    job?.status === "interrupted" && !busy && !showStitched && !showSuccessVideo
+  const percent = busy ? progressPercent(job?.progress) : undefined
+  const hasSteps = Boolean(job?.progress?.max)
+  const nodeLabel = displayNodeTitle(job?.progress?.nodeTitle)
+  const headline = hasSteps
+    ? nodeLabel
+    : nodeLabel === "正在执行"
+      ? "模型加载或排队中"
+      : nodeLabel
+  const segmentBit = active
+    ? `第 ${active.index} 段`
+    : retryable
+      ? `第 ${retryable.index} 段`
+      : last
+        ? `第 ${last.index} 段`
+        : "还没有段"
+  const headerTiming =
+    job && !busy && retryable
+      ? monitorTimingItems(job, "failed", now).filter((item) =>
+          item.startsWith("本段") || item.startsWith("累计")
+        )
+      : []
 
   return (
     <div className="flex min-h-72 flex-1 flex-col overflow-hidden rounded-xl border bg-card">
@@ -84,11 +143,7 @@ export function MonitorPanel({
             <MetaBits
               items={
                 long
-                  ? [
-                      statusLabel(job),
-                      last ? `第 ${last.index} 段` : "还没有段",
-                      job.aspect,
-                    ]
+                  ? [statusLabel(job), segmentBit, job.aspect, ...headerTiming]
                   : [
                       statusLabel(job),
                       `${job.duration}s`,
@@ -115,6 +170,7 @@ export function MonitorPanel({
           "relative flex min-h-64 flex-1 items-center justify-center studio-letterbox",
           busy && "studio-scan"
         )}
+        aria-busy={busy}
         aria-live="polite"
       >
         {showStitched && job?.long?.stitchError && !job.stitchedUrl ? (
@@ -143,34 +199,66 @@ export function MonitorPanel({
             controls
             autoPlay
           />
-        ) : busy ? (
-          <div className="relative z-10 flex w-full max-w-md flex-col items-center gap-4 p-8">
-            <p className="text-sm text-muted-foreground">
-              {job?.progress?.nodeTitle ||
-                (job?.progress?.node
-                  ? `节点 ${job.progress.node}`
-                  : "已提交，等待 ComfyUI")}
-            </p>
-            <Progress value={progressPercent} className="w-full" />
-            <p className="font-mono text-xs tabular-nums text-muted-foreground">
-              {job?.progress?.max
-                ? `${job.progress.value} / ${job.progress.max}`
-                : "排队或加载模型中"}
-            </p>
+        ) : busy && job ? (
+          <div className="relative z-10 flex w-full max-w-md flex-col items-center gap-4 p-8 text-center">
+            <Spinner className="size-8 text-primary" />
+            <div className="flex flex-col items-center gap-1">
+              <p className="text-sm text-muted-foreground">{headline}</p>
+              {percent != null ? (
+                <p className="font-mono text-2xl tabular-nums tracking-tight">
+                  {percent}%
+                </p>
+              ) : null}
+            </div>
+            <Progress value={percent} className="h-2 w-full" />
+            <div className="flex flex-col items-center gap-2">
+              {hasSteps ? (
+                <p className="font-mono text-xs tabular-nums text-muted-foreground">
+                  {job.progress?.value ?? 0} / {job.progress?.max}
+                </p>
+              ) : nodeLabel !== "正在执行" ? (
+                <p className="text-xs text-muted-foreground">模型加载或排队中</p>
+              ) : null}
+              <MetaBits
+                className="justify-center"
+                items={monitorTimingItems(
+                  job,
+                  job.status === "queued" ? "queued" : "running",
+                  now
+                )}
+              />
+            </div>
           </div>
         ) : job && isWaitingJob(job) ? (
           <div className="flex w-full max-w-xl flex-col items-center justify-center gap-3 p-8 text-center">
             <p className="text-sm font-medium">已在 Studio 队列</p>
+            <MetaBits
+              className="justify-center"
+              items={monitorTimingItems(job, "waiting", now)}
+            />
             <p className="max-w-[36ch] text-sm leading-relaxed text-muted-foreground text-pretty">
               等 ComfyUI 空闲后会按顺序开跑。参数已冻结，不能改。
             </p>
           </div>
         ) : showError ? (
-          <div className="w-full max-w-lg p-6">
+          <div className="flex w-full max-w-lg flex-col gap-3 p-6">
             <Alert variant="destructive">
               <AlertTitle>生成失败</AlertTitle>
               <AlertDescription>{job?.error}</AlertDescription>
             </Alert>
+            {job ? (
+              <MetaBits items={monitorTimingItems(job, "failed", now)} />
+            ) : null}
+          </div>
+        ) : showInterrupted ? (
+          <div className="flex w-full max-w-lg flex-col gap-3 p-6">
+            <Alert>
+              <AlertTitle>已中断</AlertTitle>
+              <AlertDescription>{job?.error ?? "这次生成已停下。"}</AlertDescription>
+            </Alert>
+            {job ? (
+              <MetaBits items={monitorTimingItems(job, "failed", now)} />
+            ) : null}
           </div>
         ) : (
           <div

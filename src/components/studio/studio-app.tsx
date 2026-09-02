@@ -1,6 +1,6 @@
 "use client"
 
-import { useCallback, useEffect, useMemo, useRef, useState } from "react"
+import { useCallback, useEffect, useRef, useState } from "react"
 import { toast } from "sonner"
 import {
   ArrowLeftIcon,
@@ -422,14 +422,6 @@ export function StudioApp() {
       return previous.filter((item) => item.id !== id)
     })
   }
-
-  const progressPercent = useMemo(() => {
-    if (!current?.progress?.max) return busy ? 8 : 0
-    return Math.min(
-      100,
-      Math.round((current.progress.value / current.progress.max) * 100)
-    )
-  }, [busy, current])
 
   function goHome() {
     setShell("home")
@@ -1160,7 +1152,6 @@ export function StudioApp() {
             <MonitorPanel
               job={liveJob}
               busy={Boolean(liveJob && isBusyJob(liveJob))}
-              progressPercent={progressPercent}
               aspect={liveJob?.aspect ?? aspect}
               duration={liveJob ? String(liveJob.duration) : duration}
               mode={monitorMode}

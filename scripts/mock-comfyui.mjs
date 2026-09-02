@@ -173,15 +173,16 @@ async function runFakeJob(promptId, clientId) {
     data: { status: { exec_info: { queue_remaining: 1 } }, sid: clientId },
   })
   broadcast({ type: "execution_start", data: { prompt_id: promptId } })
+  await delay(700)
   broadcast({
     type: "executing",
-    data: { prompt_id: promptId, node: "131" },
+    data: { prompt_id: promptId, node: "14" },
   })
   for (let value = 1; value <= 8; value += 1) {
     await delay(180)
     broadcast({
       type: "progress",
-      data: { prompt_id: promptId, node: "131", value, max: 8 },
+      data: { prompt_id: promptId, node: "14", value, max: 8 },
     })
   }
   history.set(promptId, {

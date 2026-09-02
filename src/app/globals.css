@@ -231,6 +231,19 @@
   }
 }
 
+.progress-indeterminate [data-slot="progress-indicator"] {
+  animation: progress-indeterminate 1.35s ease-in-out infinite;
+}
+
+@keyframes progress-indeterminate {
+  0% {
+    transform: translateX(-120%);
+  }
+  100% {
+    transform: translateX(320%);
+  }
+}
+
 .skip-link {
   position: absolute;
   left: 1rem;
@@ -253,7 +266,8 @@
   }
 
   .lamp-live,
-  .studio-scan::after {
+  .studio-scan::after,
+  .progress-indeterminate [data-slot="progress-indicator"] {
     animation: none;
   }
 

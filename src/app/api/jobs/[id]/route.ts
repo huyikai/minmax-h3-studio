@@ -1,6 +1,7 @@
 import { getJob, isActiveStatus, removeJob, toPublicJob, upsertJob } from "@/lib/jobs"
 import { ensureJobWatch } from "@/lib/runner"
 import { interrupt } from "@/lib/comfy"
+import { withFrozenElapsed } from "@/lib/job-timing"
 import { isLongJob } from "@/lib/long-video"
 import { pumpQueue } from "@/lib/studio-queue"
 
@@ -34,14 +35,15 @@ export async function DELETE(
       // still mark interrupted
     }
     if (isLongJob(job) && job.long) {
+      const frozen = withFrozenElapsed(job)
       const next = await upsertJob({
-        ...job,
+        ...frozen,
         status: "awaiting",
         error: undefined,
         long: {
-          ...job.long,
-          segments: job.long.segments.map((item) =>
-            item.comfyPromptId === job.comfyPromptId ||
+          ...frozen.long!,
+          segments: frozen.long!.segments.map((item) =>
+            item.comfyPromptId === frozen.comfyPromptId ||
             item.status === "queued" ||
             item.status === "running"
               ? { ...item, status: "interrupted" as const, error: "已中断" }
@@ -53,7 +55,7 @@ export async function DELETE(
       return Response.json({ job: toPublicJob(next) })
     }
     const next = await upsertJob({
-      ...job,
+      ...withFrozenElapsed(job),
       status: "interrupted",
       error: "已中断",
     })

@@ -5,11 +5,12 @@ import {
   saveJobOutput,
   subscribeComfyProgress,
 } from "@/lib/comfy"
-import type { Job } from "@/lib/types"
+import type { ApiWorkflow, Job } from "@/lib/types"
 import fs from "node:fs/promises"
 import path from "node:path"
 import { jobOutputDir } from "@/lib/paths"
 import { isBusyJob } from "@/lib/job-view"
+import { displayNodeTitle, readableNodeLabel, withFrozenElapsed } from "@/lib/job-timing"
 import {
   chainDeliveredSeconds,
   isLongJob,
@@ -33,29 +34,30 @@ async function watchJob(jobId: string) {
   if (!isBusyJob(initial)) return
 
   const promptId = initial.comfyPromptId
+  const labels = await readNodeLabels(jobId, initial.submittedWorkflowFile)
   const stop = subscribeComfyProgress(initial.clientId, promptId, async (event) => {
     const job = await getJob(jobId)
     if (!job || job.comfyPromptId !== promptId || !isBusyJob(job)) return
     if (event.type === "progress") {
       await upsertJob({
-        ...job,
+        ...withRunStart(job),
         status: "running",
         progress: {
           value: event.value,
           max: event.max,
           node: event.node,
-          nodeTitle: nodeTitle(job, event.node),
+          nodeTitle: resolveNodeTitle(labels, event.node, job.progress?.nodeTitle),
         },
       })
     } else if (event.type === "executing") {
       await upsertJob({
-        ...job,
+        ...withRunStart(job),
         status: "running",
         progress: {
           value: job.progress?.value ?? 0,
           max: job.progress?.max ?? 0,
           node: event.node,
-          nodeTitle: nodeTitle(job, event.node),
+          nodeTitle: resolveNodeTitle(labels, event.node, job.progress?.nodeTitle),
         },
       })
     } else if (event.type === "error") {
@@ -84,8 +86,9 @@ async function watchJob(jobId: string) {
           await completeLongSegment(job, video)
         } else {
           const outputPath = await saveJobOutput(job, video)
+          const frozen = withFrozenElapsed(job)
           await upsertJob({
-            ...job,
+            ...frozen,
             status: "success",
             outputFile: outputPath,
             progress: {
@@ -130,17 +133,18 @@ async function completeLongSegment(
   job: Job,
   video: { filename: string; subfolder?: string; type?: string }
 ) {
-  const long = job.long
+  const frozen = withFrozenElapsed(job)
+  const long = frozen.long
   if (!long) return
   const index =
-    long.segments.find((item) => item.comfyPromptId === job.comfyPromptId)
+    long.segments.find((item) => item.comfyPromptId === frozen.comfyPromptId)
       ?.index ?? long.segments.find((item) => item.status === "running")?.index
   if (!index) {
-    await failJob(job, "找不到当前正在生成的片段。")
+    await failJob(frozen, "找不到当前正在生成的片段。")
     return
   }
 
-  const outputPath = await saveJobOutput(job, video, segmentFileName(index))
+  const outputPath = await saveJobOutput(frozen, video, segmentFileName(index))
   const segments = long.segments.map((item) =>
     item.index === index
       ? {
@@ -162,24 +166,24 @@ async function completeLongSegment(
     .filter((file): file is string => Boolean(file))
 
   try {
-    nextLong.stitchedFile = await stitchSegmentFiles(job.id, successFiles)
+    nextLong.stitchedFile = await stitchSegmentFiles(frozen.id, successFiles)
   } catch (error) {
     nextLong.stitchError =
       error instanceof Error ? error.message : "拼接失败"
   }
 
   await upsertJob({
-    ...job,
+    ...frozen,
     status: "awaiting",
     error: undefined,
     outputFile: outputPath,
     duration: chainDeliveredSeconds(nextLong),
     seed:
-      segments.find((item) => item.index === index)?.seed ?? job.seed,
+      segments.find((item) => item.index === index)?.seed ?? frozen.seed,
     long: nextLong,
     progress: {
-      value: job.progress?.max ?? 1,
-      max: job.progress?.max ?? 1,
+      value: frozen.progress?.max ?? 1,
+      max: frozen.progress?.max ?? 1,
       nodeTitle: `第 ${index} 段完成`,
     },
   })
@@ -187,17 +191,18 @@ async function completeLongSegment(
 
 async function failJob(job: Job, message: string) {
   const error = rewriteLatentError(message)
-  if (!isLongJob(job) || !job.long) {
-    await upsertJob({ ...job, status: "error", error })
+  const frozen = withFrozenElapsed(job)
+  if (!isLongJob(frozen) || !frozen.long) {
+    await upsertJob({ ...frozen, status: "error", error })
   } else {
-    const promptId = job.comfyPromptId
+    const promptId = frozen.comfyPromptId
     await upsertJob({
-      ...job,
+      ...frozen,
       status: "error",
       error,
       long: {
-        ...job.long,
-        segments: job.long.segments.map((item) =>
+        ...frozen.long,
+        segments: frozen.long.segments.map((item) =>
           item.comfyPromptId === promptId || item.status === "running"
             ? { ...item, status: "error" as const, error }
             : item
@@ -208,9 +213,55 @@ async function failJob(job: Job, message: string) {
   await import("@/lib/studio-queue").then((mod) => mod.pumpQueue())
 }
 
-function nodeTitle(job: Job, nodeId?: string) {
-  if (!nodeId) return job.progress?.nodeTitle
-  return job.progress?.node === nodeId ? job.progress.nodeTitle : `节点 ${nodeId}`
+function withRunStart(job: Job): Job {
+  if (job.startedAt) return job
+  const startedAt = new Date().toISOString()
+  if (!job.long) return { ...job, startedAt }
+  return {
+    ...job,
+    startedAt,
+    long: {
+      ...job.long,
+      segments: job.long.segments.map((item) =>
+        item.status === "running" && !item.startedAt
+          ? { ...item, startedAt }
+          : item
+      ),
+    },
+  }
+}
+
+function resolveNodeTitle(
+  labels: Map<string, string>,
+  nodeId: string | undefined,
+  previous?: string
+) {
+  if (!nodeId) return displayNodeTitle(previous)
+  return labels.get(nodeId) ?? "正在执行"
+}
+
+async function readNodeLabels(jobId: string, filePath?: string) {
+  const labels = new Map<string, string>()
+  const candidates = [
+    filePath,
+    path.join(jobOutputDir(jobId), "workflow.json"),
+  ].filter((item): item is string => Boolean(item))
+  for (const candidate of candidates) {
+    try {
+      const raw = await fs.readFile(candidate, "utf8")
+      const data = JSON.parse(raw) as ApiWorkflow
+      if (!data || typeof data !== "object") continue
+      for (const [id, node] of Object.entries(data)) {
+        if (!node || typeof node !== "object") continue
+        const label = readableNodeLabel(node)
+        if (label) labels.set(id, label)
+      }
+      if (labels.size > 0) return labels
+    } catch {
+      // try the next path
+    }
+  }
+  return labels
 }
 
 function sleep(ms: number) {

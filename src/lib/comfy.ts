@@ -283,6 +283,12 @@ export type ProgressEvent =
   | { type: "error"; message: string }
   | { type: "complete" }
 
+function asNodeId(value: unknown) {
+  if (typeof value === "string" && value.length > 0) return value
+  if (typeof value === "number" && Number.isFinite(value)) return String(value)
+  return undefined
+}
+
 export function subscribeComfyProgress(
   clientId: string,
   promptId: string,
@@ -319,12 +325,12 @@ export function subscribeComfyProgress(
             type: "progress",
             value: Number(data.value ?? 0),
             max: Number(data.max ?? 0),
-            node: typeof data.node === "string" ? data.node : undefined,
+            node: asNodeId(data.node),
           })
         } else if (message.type === "executing") {
           onEvent({
             type: "executing",
-            node: typeof data.node === "string" ? data.node : undefined,
+            node: asNodeId(data.node),
           })
         } else if (message.type === "execution_error") {
           const exception =

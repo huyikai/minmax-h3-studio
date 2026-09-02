@@ -126,6 +126,8 @@ export type LongSegment = {
   seed: number
   status: LongSegmentStatus
   enqueuedAt?: string
+  startedAt?: string
+  runElapsedMs?: number
   comfyPromptId?: string
   outputFile?: string
   outputUrl?: string
@@ -199,6 +201,8 @@ export type Job = {
   outputFile?: string
   submittedWorkflowFile?: string
   enqueuedAt?: string
+  startedAt?: string
+  runElapsedMs?: number
   inputMedia?: StoredInputMedia[]
   long?: LongVideoState
 }

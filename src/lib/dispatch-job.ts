@@ -50,13 +50,18 @@ async function dispatchShort(job: Job) {
     clientId,
     submittedWorkflowFile: submittedPath,
     error: undefined,
+    startedAt: undefined,
+    runElapsedMs: undefined,
   })
   try {
     const promptId = await submitPrompt(patched, clientId)
+    const startedAt = new Date().toISOString()
     const running = await upsertJob({
       ...queued,
       status: "running",
       comfyPromptId: promptId,
+      startedAt,
+      runElapsedMs: undefined,
     })
     ensureJobWatch(running.id)
     if (settings.defaultWorkflow !== job.workflowFile) {
@@ -131,27 +136,46 @@ async function dispatchLong(job: Job) {
     clientId,
     submittedWorkflowFile: submittedPath,
     error: undefined,
+    startedAt: undefined,
+    runElapsedMs: undefined,
     prompt: segment.prompt,
     duration: segment.duration,
     seed: segment.seed,
     long: {
       ...job.long,
       segments: job.long.segments.map((item) =>
-        item.index === segment.index ? { ...item, status: "queued" as const } : item
+        item.index === segment.index
+          ? {
+              ...item,
+              status: "queued" as const,
+              startedAt: undefined,
+              runElapsedMs: undefined,
+            }
+          : item
       ),
     },
   })
   try {
     const promptId = await submitPrompt(patched, clientId)
+    const startedAt = new Date().toISOString()
     const running = await upsertJob({
       ...queued,
       status: "running",
       comfyPromptId: promptId,
+      startedAt,
+      runElapsedMs: undefined,
       long: {
         ...queued.long!,
         segments: queued.long!.segments.map((item) =>
           item.index === segment.index
-            ? { ...item, status: "running" as const, comfyPromptId: promptId }
+            ? {
+                ...item,
+                status: "running" as const,
+                comfyPromptId: promptId,
+                startedAt,
+                runElapsedMs: undefined,
+                error: undefined,
+              }
             : item
         ),
       },
