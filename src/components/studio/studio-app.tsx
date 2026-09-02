@@ -33,6 +33,7 @@ import {
   AlertDialogHeader,
   AlertDialogTitle,
 } from "@/components/ui/alert-dialog"
+import { Skeleton } from "@/components/ui/skeleton"
 import { Spinner } from "@/components/ui/spinner"
 import { ComposeForm } from "@/components/studio/compose-form"
 import { PromptGuide } from "@/components/studio/prompt-guide"
@@ -46,6 +47,7 @@ import { TaskList } from "@/components/studio/task-list"
 import { QueuePanel } from "@/components/studio/queue-panel"
 import { MonitorPanel, type MonitorMode } from "@/components/studio/monitor-panel"
 import { LongWorkspace, type LongGeneratePayload } from "@/components/studio/long-workspace"
+import { HomeBootSkeleton } from "@/components/studio/home-boot-skeleton"
 import { ThemeToggle } from "@/components/studio/theme-toggle"
 import { WorkspaceSplit } from "@/components/studio/workspace-split"
 import type { WorkflowBundle } from "@/components/studio/types"
@@ -128,6 +130,8 @@ export function StudioApp() {
   const [guideOpen, setGuideOpen] = useState(false)
   const [guidePinned, setGuidePinned] = useState(false)
   const [monitorMode, setMonitorMode] = useState<MonitorMode>("current")
+  const [booting, setBooting] = useState(true)
+  const [healthBusy, setHealthBusy] = useState(false)
 
   const [prompt, setPrompt] = useState("")
   const [duration, setDuration] = useState("5")
@@ -164,6 +168,15 @@ export function StudioApp() {
     const json = (await response.json()) as HealthStatus
     setHealth(json)
   }, [])
+
+  async function retryHealth() {
+    setHealthBusy(true)
+    try {
+      await loadHealth()
+    } finally {
+      setHealthBusy(false)
+    }
+  }
 
   const loadSettings = useCallback(async () => {
     const response = await fetch("/api/settings")
@@ -318,21 +331,51 @@ export function StudioApp() {
   }, [])
 
   useEffect(() => {
+    let cancelled = false
     void (async () => {
-      const preferred = await loadSettings()
-      const { selected } = await loadWorkflows(preferred)
-      if (selected) await loadBundle(selected)
-      await loadJobs()
-      await loadHealth()
-      const loraRes = await fetch("/api/loras")
-      const loraJson = (await loraRes.json()) as { loras?: string[] }
-      setLoraFiles(loraJson.loras ?? [])
+      try {
+        await Promise.all([
+          (async () => {
+            try {
+              const preferred = await loadSettings()
+              const { selected } = await loadWorkflows(preferred)
+              if (selected) void loadBundle(selected)
+            } catch {
+              toast.error("读取工作流失败")
+            }
+          })(),
+          (async () => {
+            try {
+              await loadJobs()
+            } catch {
+              toast.error("读取任务失败")
+            }
+          })(),
+          (async () => {
+            try {
+              await loadHealth()
+            } catch {
+              // 结束后按未连接处理
+            }
+          })(),
+        ])
+      } finally {
+        if (!cancelled) setBooting(false)
+      }
+      try {
+        const loraRes = await fetch("/api/loras")
+        const loraJson = (await loraRes.json()) as { loras?: string[] }
+        if (!cancelled) setLoraFiles(loraJson.loras ?? [])
+      } catch {
+        // 新建时再拉一次即可
+      }
     })()
     const timer = setInterval(() => {
-      void loadHealth()
-      void loadJobs()
+      void loadHealth().catch(() => {})
+      void loadJobs().catch(() => {})
     }, 4000)
     return () => {
+      cancelled = true
       clearInterval(timer)
       eventSourceRef.current?.close()
     }
@@ -826,23 +869,39 @@ export function StudioApp() {
           MiniMax H3 Studio
         </h1>
         <div className="flex flex-wrap items-center gap-2">
-          <span className="flex items-center gap-2 rounded-md border bg-card px-2.5 py-1.5 font-mono text-[11px] tabular-nums">
-            <span
-              className={cn("size-1.5 rounded-full", connected ? "lamp-live" : "lamp-off")}
-              aria-hidden="true"
-            />
-            {connected
-              ? health?.queueRemaining
-                ? `本机 ${health.port} 队列 ${health.queueRemaining}`
-                : `本机 ${health?.port ?? 8188}`
-              : "未连接"}
-          </span>
-          {!connected ? (
-            <Button type="button" size="sm" variant="outline" onClick={() => void loadHealth()}>
-              <RefreshCwIcon data-icon="inline-start" />
-              重试
-            </Button>
-          ) : null}
+          {booting ? (
+            <Skeleton className="h-8 w-28" />
+          ) : (
+            <>
+              <span className="flex items-center gap-2 rounded-md border bg-card px-2.5 py-1.5 font-mono text-[11px] tabular-nums">
+                <span
+                  className={cn("size-1.5 rounded-full", connected ? "lamp-live" : "lamp-off")}
+                  aria-hidden="true"
+                />
+                {connected
+                  ? health?.queueRemaining
+                    ? `本机 ${health.port} 队列 ${health.queueRemaining}`
+                    : `本机 ${health?.port ?? 8188}`
+                  : "未连接"}
+              </span>
+              {!connected ? (
+                <Button
+                  type="button"
+                  size="sm"
+                  variant="outline"
+                  disabled={healthBusy}
+                  onClick={() => void retryHealth()}
+                >
+                  {healthBusy ? (
+                    <Spinner data-icon="inline-start" />
+                  ) : (
+                    <RefreshCwIcon data-icon="inline-start" />
+                  )}
+                  重试
+                </Button>
+              ) : null}
+            </>
+          )}
           <Button type="button" size="sm" variant="ghost" asChild>
             <a href={comfyUrl} target="_blank" rel="noreferrer">
               <ExternalLinkIcon data-icon="inline-start" />
@@ -866,77 +925,87 @@ export function StudioApp() {
       </header>
 
       {shell === "home" ? (
-        <div id="studio-main" className="flex min-h-0 flex-1 flex-col overflow-hidden">
+        <div
+          id="studio-main"
+          className="flex min-h-0 flex-1 flex-col overflow-hidden"
+          aria-busy={booting}
+        >
           <section className="mx-auto flex min-h-0 w-full max-w-3xl flex-1 flex-col gap-4 overflow-hidden p-4">
-            {!connected ? (
-              <Alert className="shrink-0">
-                <AlertTitle>还没有连上 ComfyUI</AlertTitle>
-                <AlertDescription>
-                  请在本机启动 ComfyUI（默认 8188），然后再生成。Studio
-                  不会代装模型，也不会改你的节点图。
-                </AlertDescription>
-              </Alert>
-            ) : null}
-            {workflows.length === 0 ? (
-              <Empty className="shrink-0 border bg-card/40">
-                <EmptyHeader>
-                  <EmptyMedia variant="icon">
-                    <ClapperboardIcon />
-                  </EmptyMedia>
-                  <EmptyTitle>没有可用的工作流</EmptyTitle>
-                  <EmptyDescription>
-                    仓库自带官方和 Turbo 预设。若这里是空的，检查 templates/workflows/，或在设置里上传自己的 API JSON。
-                  </EmptyDescription>
-                </EmptyHeader>
-                <EmptyContent>
-                  <Button
-                    type="button"
-                    onClick={() => {
-                      setFocusEnvironment(false)
-                      setSettingsOpen(true)
-                    }}
-                  >
-                    打开设置
-                  </Button>
-                </EmptyContent>
-              </Empty>
+            {booting ? (
+              <HomeBootSkeleton />
             ) : (
-              <div className="grid shrink-0 grid-cols-1 gap-2 sm:grid-cols-2">
-                <Button
-                  type="button"
-                  size="lg"
-                  className="h-11 w-full"
-                  onClick={() => void openNewShort()}
-                >
-                  <PlusIcon data-icon="inline-start" />
-                  新建短片
-                </Button>
-                <Button
-                  type="button"
-                  size="lg"
-                  variant="outline"
-                  className="h-11 w-full"
-                  onClick={() => void openNewLong()}
-                >
-                  <PlusIcon data-icon="inline-start" />
-                  新建长视频
-                </Button>
-              </div>
+              <>
+                {!connected ? (
+                  <Alert className="shrink-0">
+                    <AlertTitle>还没有连上 ComfyUI</AlertTitle>
+                    <AlertDescription>
+                      请在本机启动 ComfyUI（默认 8188），然后再生成。Studio
+                      不会代装模型，也不会改你的节点图。
+                    </AlertDescription>
+                  </Alert>
+                ) : null}
+                {workflows.length === 0 ? (
+                  <Empty className="shrink-0 border bg-card/40">
+                    <EmptyHeader>
+                      <EmptyMedia variant="icon">
+                        <ClapperboardIcon />
+                      </EmptyMedia>
+                      <EmptyTitle>没有可用的工作流</EmptyTitle>
+                      <EmptyDescription>
+                        仓库自带官方和 Turbo 预设。若这里是空的，检查 templates/workflows/，或在设置里上传自己的 API JSON。
+                      </EmptyDescription>
+                    </EmptyHeader>
+                    <EmptyContent>
+                      <Button
+                        type="button"
+                        onClick={() => {
+                          setFocusEnvironment(false)
+                          setSettingsOpen(true)
+                        }}
+                      >
+                        打开设置
+                      </Button>
+                    </EmptyContent>
+                  </Empty>
+                ) : (
+                  <div className="grid shrink-0 grid-cols-1 gap-2 sm:grid-cols-2">
+                    <Button
+                      type="button"
+                      size="lg"
+                      className="h-11 w-full"
+                      onClick={() => void openNewShort()}
+                    >
+                      <PlusIcon data-icon="inline-start" />
+                      新建短片
+                    </Button>
+                    <Button
+                      type="button"
+                      size="lg"
+                      variant="outline"
+                      className="h-11 w-full"
+                      onClick={() => void openNewLong()}
+                    >
+                      <PlusIcon data-icon="inline-start" />
+                      新建长视频
+                    </Button>
+                  </div>
+                )}
+                <QueuePanel
+                  queue={queue}
+                  jobs={jobs}
+                  onOpen={(job) => void openJob(job)}
+                  onResume={() => void resumeQueue()}
+                  onWithdraw={(job) => void withdrawQueueItem(job)}
+                />
+                <TaskList
+                  jobs={jobs}
+                  currentId={current?.id}
+                  onSelect={(job) => void openJob(job)}
+                  onDelete={(job) => setDeleteTargets([job])}
+                  onDeleteMany={setDeleteTargets}
+                />
+              </>
             )}
-            <QueuePanel
-              queue={queue}
-              jobs={jobs}
-              onOpen={(job) => void openJob(job)}
-              onResume={() => void resumeQueue()}
-              onWithdraw={(job) => void withdrawQueueItem(job)}
-            />
-            <TaskList
-              jobs={jobs}
-              currentId={current?.id}
-              onSelect={(job) => void openJob(job)}
-              onDelete={(job) => setDeleteTargets([job])}
-              onDeleteMany={setDeleteTargets}
-            />
           </section>
         </div>
       ) : (
