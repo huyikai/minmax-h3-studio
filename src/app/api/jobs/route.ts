@@ -1,6 +1,7 @@
 import { randomUUID } from "node:crypto"
 import { ASPECT_PRESETS } from "@/lib/types"
 import type { Job, LoraFormValue } from "@/lib/types"
+import { normalizeLora } from "@/lib/lora"
 import { listJobs, removeJobs, toPublicJob, upsertJob, getJob } from "@/lib/jobs"
 import { evaluateEnvironment, environmentLineFor } from "@/lib/environment"
 import { emptyLongState, LONG_T2V_FILE } from "@/lib/long-video"
@@ -164,7 +165,7 @@ async function createLongJob(form: FormData) {
 function parseLoras(raw: string): LoraFormValue[] {
   try {
     const parsed = JSON.parse(raw) as LoraFormValue[]
-    return Array.isArray(parsed) ? parsed : []
+    return Array.isArray(parsed) ? parsed.map(normalizeLora) : []
   } catch {
     return []
   }

@@ -63,6 +63,7 @@ import {
   refSlotId,
 } from "@/lib/refs"
 import { resolveGuideMode } from "@/lib/prompt-guide"
+import { normalizeLora } from "@/lib/lora"
 import { isBusyJob, isLongJob, isWaitingJob } from "@/lib/job-view"
 import { waitingSegment } from "@/lib/long-video"
 import { cn } from "@/lib/utils"
@@ -235,7 +236,7 @@ export function StudioApp() {
     setSeed(next.values.seed || randomSeed())
     setSteps(next.values.steps !== undefined ? String(next.values.steps) : "")
     setCfg(next.values.cfg !== undefined ? String(next.values.cfg) : "")
-    setLoras(next.values.loras)
+    setLoras(next.values.loras.map(normalizeLora))
     setSlotFiles((previous) => {
       for (const item of Object.values(previous)) {
         URL.revokeObjectURL(item.preview)
@@ -576,7 +577,7 @@ export function StudioApp() {
     setRandomize(false)
     setSteps(job.steps !== undefined ? String(job.steps) : "")
     setCfg(job.cfg !== undefined ? String(job.cfg) : "")
-    setLoras(job.loras)
+    setLoras(job.loras.map(normalizeLora))
     if (job.workflowFile) {
       setWorkflowName(WORKFLOW_ALIASES[job.workflowFile] ?? job.workflowFile)
     }

@@ -11,11 +11,14 @@ export type FieldMapping = {
   input: string
 }
 
+export type LoraKind = "turbo" | "generic"
+
 export type LoraMapping = {
   nodeId: string
   nameInput: string
   strengthInput: string
   nested?: boolean
+  kind?: LoraKind
 }
 
 export type MediaKind = "image" | "video" | "audio"
@@ -92,6 +95,7 @@ export type LoraFormValue = {
   nested: boolean
   nameInput: string
   strengthInput: string
+  kind?: LoraKind
 }
 
 export type JobStatus =

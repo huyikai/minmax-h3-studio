@@ -10,6 +10,7 @@ import type {
   WorkflowMapping,
 } from "@/lib/types"
 import { ASPECT_PRESETS } from "@/lib/types"
+import { appliedLoraStrength, normalizeLora } from "@/lib/lora"
 import {
   REF_KINDS,
   REF_LIMITS,
@@ -290,6 +291,7 @@ export function detectMapping(workflow: ApiWorkflow): WorkflowMapping {
         nodeId: id,
         nameInput: "lora_name",
         strengthInput: "strength_model",
+        kind: "generic",
       })
       continue
     }
@@ -298,6 +300,7 @@ export function detectMapping(workflow: ApiWorkflow): WorkflowMapping {
         nodeId: id,
         nameInput: "lora_name",
         strengthInput: "strength",
+        kind: "turbo",
       })
       continue
     }
@@ -314,6 +317,7 @@ export function detectMapping(workflow: ApiWorkflow): WorkflowMapping {
             nameInput: key,
             strengthInput: key,
             nested: true,
+            kind: "generic",
           })
         }
       }
@@ -505,7 +509,7 @@ function setNestedLora(
     ...base,
     on: value.enabled,
     lora: value.name,
-    strength: value.enabled ? value.strength : 0,
+    strength: appliedLoraStrength(value),
   }
 }
 
@@ -619,9 +623,10 @@ export function applyPatch(
       continue
     }
     node.inputs[spec.nameInput] = lora.name
-    node.inputs[spec.strengthInput] = lora.enabled ? lora.strength : 0
+    const strength = appliedLoraStrength(lora)
+    node.inputs[spec.strengthInput] = strength
     if (node.inputs.strength_clip !== undefined) {
-      node.inputs.strength_clip = lora.enabled ? lora.strength : 0
+      node.inputs.strength_clip = strength
     }
   }
 
@@ -701,8 +706,11 @@ export function extractValues(
 
   const loras: LoraFormValue[] = mapping.loras.map((lora) => {
     const node = workflow[lora.nodeId]
+    const kind =
+      lora.kind ??
+      (node?.class_type === "MiniMaxH3TurboLoRA" ? "turbo" : "generic")
     if (!node) {
-      return {
+      return normalizeLora({
         nodeId: lora.nodeId,
         name: "",
         strength: 1,
@@ -710,7 +718,8 @@ export function extractValues(
         nested: Boolean(lora.nested),
         nameInput: lora.nameInput,
         strengthInput: lora.strengthInput,
-      }
+        kind,
+      })
     }
     if (lora.nested) {
       const slot = node.inputs[lora.nameInput]
@@ -719,7 +728,7 @@ export function extractValues(
           ? (slot as Record<string, unknown>)
           : {}
       const strength = typeof record.strength === "number" ? record.strength : 1
-      return {
+      return normalizeLora({
         nodeId: lora.nodeId,
         name: typeof record.lora === "string" ? record.lora : "",
         strength,
@@ -727,12 +736,13 @@ export function extractValues(
         nested: true,
         nameInput: lora.nameInput,
         strengthInput: lora.strengthInput,
-      }
+        kind,
+      })
     }
     const name = scalarInput(node.inputs[lora.nameInput])
     const strengthRaw = scalarInput(node.inputs[lora.strengthInput])
     const strength = typeof strengthRaw === "number" ? strengthRaw : 1
-    return {
+    return normalizeLora({
       nodeId: lora.nodeId,
       name: typeof name === "string" ? name : "",
       strength,
@@ -740,7 +750,8 @@ export function extractValues(
       nested: false,
       nameInput: lora.nameInput,
       strengthInput: lora.strengthInput,
-    }
+      kind,
+    })
   })
 
   return {

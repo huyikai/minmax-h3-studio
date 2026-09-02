@@ -28,6 +28,11 @@ import {
 } from "@/components/studio/reference-slots"
 import type { LoraFormValue, MediaKind, MediaSlot } from "@/lib/types"
 import { ASPECT_PRESETS, DURATION_OPTIONS } from "@/lib/types"
+import {
+  clampLoraStrength,
+  loraKind,
+  loraStrengthMax,
+} from "@/lib/lora"
 import type { WorkflowListItem } from "@/lib/default-workflows"
 import { cn } from "@/lib/utils"
 
@@ -350,85 +355,97 @@ export function ComposeForm({
 
           {loras.length > 0 ? (
             <FieldGroup>
-              {loras.map((lora, index) => (
-                <Field key={`${lora.nodeId}-${index}`}>
-                  <LabelWithHelp label={`LoRA ${index + 1}`}>
-                    工作流里检测到的 LoRA（含 MiniMax H3 Turbo LoRA）。可开关、换文件、调强度。关掉等于强度为
-                    0，不会从节点图里删掉。
-                  </LabelWithHelp>
-                  <div className="flex items-center gap-2">
-                    <Switch
-                      checked={lora.enabled}
-                      disabled={readOnly}
-                      onCheckedChange={(enabled) => {
+              {loras.map((lora, index) => {
+                const kind = loraKind(lora)
+                const turbo = kind === "turbo"
+                const max = loraStrengthMax(kind)
+                const strength = clampLoraStrength(lora)
+                return (
+                  <Field key={`${lora.nodeId}-${index}`}>
+                    <LabelWithHelp label={turbo ? "Turbo LoRA" : `LoRA ${index + 1}`}>
+                      {turbo
+                        ? "工作流里的 MiniMax H3 Turbo LoRA。可开关、换文件、调强度。关掉等于强度为 0，不会从节点图里删掉。默认 1.0；节点允许更高，Studio 按作者常用区间收到 1.2。"
+                        : "工作流里检测到的 LoRA。可开关、换文件、调强度。关掉等于强度为 0，不会从节点图里删掉。"}
+                    </LabelWithHelp>
+                    <div className="flex items-center gap-2">
+                      <Switch
+                        checked={lora.enabled}
+                        disabled={readOnly}
+                        onCheckedChange={(enabled) => {
+                          onLorasChange((list) =>
+                            list.map((item, i) =>
+                              i === index ? { ...item, enabled } : item
+                            )
+                          )
+                        }}
+                      />
+                      <span className="text-sm">启用</span>
+                    </div>
+                    {loraFiles.length > 0 ? (
+                      <Select
+                        value={lora.name || undefined}
+                        onValueChange={(name) => {
+                          onLorasChange((list) =>
+                            list.map((item, i) =>
+                              i === index ? { ...item, name } : item
+                            )
+                          )
+                        }}
+                        disabled={readOnly || !lora.enabled}
+                      >
+                        <SelectTrigger className="w-full">
+                          <SelectValue placeholder="选择 LoRA 文件" />
+                        </SelectTrigger>
+                        <SelectContent>
+                          <SelectGroup>
+                            {loraFiles.map((name) => (
+                              <SelectItem key={name} value={name}>
+                                {name}
+                              </SelectItem>
+                            ))}
+                          </SelectGroup>
+                        </SelectContent>
+                      </Select>
+                    ) : (
+                      <Input
+                        value={lora.name}
+                        disabled={readOnly || !lora.enabled}
+                        onChange={(event) => {
+                          const name = event.target.value
+                          onLorasChange((list) =>
+                            list.map((item, i) =>
+                              i === index ? { ...item, name } : item
+                            )
+                          )
+                        }}
+                      />
+                    )}
+                    <Slider
+                      min={0}
+                      max={max}
+                      step={0.05}
+                      value={[strength]}
+                      disabled={readOnly || !lora.enabled}
+                      onValueChange={(value) => {
+                        const next = Math.min(max, Math.max(0, value[0] ?? 1))
                         onLorasChange((list) =>
                           list.map((item, i) =>
-                            i === index ? { ...item, enabled } : item
+                            i === index ? { ...item, strength: next, kind } : item
                           )
                         )
                       }}
                     />
-                    <span className="text-sm">启用</span>
-                  </div>
-                  {loraFiles.length > 0 ? (
-                    <Select
-                      value={lora.name || undefined}
-                      onValueChange={(name) => {
-                        onLorasChange((list) =>
-                          list.map((item, i) =>
-                            i === index ? { ...item, name } : item
-                          )
-                        )
-                      }}
-                      disabled={readOnly || !lora.enabled}
-                    >
-                      <SelectTrigger className="w-full">
-                        <SelectValue placeholder="选择 LoRA 文件" />
-                      </SelectTrigger>
-                      <SelectContent>
-                        <SelectGroup>
-                          {loraFiles.map((name) => (
-                            <SelectItem key={name} value={name}>
-                              {name}
-                            </SelectItem>
-                          ))}
-                        </SelectGroup>
-                      </SelectContent>
-                    </Select>
-                  ) : (
-                    <Input
-                      value={lora.name}
-                      disabled={readOnly || !lora.enabled}
-                      onChange={(event) => {
-                        const name = event.target.value
-                        onLorasChange((list) =>
-                          list.map((item, i) =>
-                            i === index ? { ...item, name } : item
-                          )
-                        )
-                      }}
-                    />
-                  )}
-                  <Slider
-                    min={0}
-                    max={2}
-                    step={0.05}
-                    value={[lora.strength]}
-                    disabled={readOnly || !lora.enabled}
-                    onValueChange={(value) => {
-                      const strength = value[0] ?? 1
-                      onLorasChange((list) =>
-                        list.map((item, i) =>
-                          i === index ? { ...item, strength } : item
-                        )
-                      )
-                    }}
-                  />
-                  <FieldDescription className="font-mono tabular-nums">
-                    强度 {lora.strength.toFixed(2)}
-                  </FieldDescription>
-                </Field>
-              ))}
+                    <FieldDescription className="font-mono tabular-nums">
+                      强度 {strength.toFixed(2)}
+                    </FieldDescription>
+                    <FieldDescription>
+                      {turbo
+                        ? "日常 1.00。发虚/拖影可加到约 1.20，过锐降到 0.80–0.95。"
+                        : "常见 0.6–1.0，很少需要超过 1。"}
+                    </FieldDescription>
+                  </Field>
+                )
+              })}
             </FieldGroup>
           ) : null}
         </FieldGroup>
