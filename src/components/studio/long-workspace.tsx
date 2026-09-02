@@ -88,7 +88,7 @@ export function LongWorkspace({
   textareaRef: React.RefObject<HTMLTextAreaElement | null>
   onPromptChange: (value: string | ((prev: string) => string)) => void
   onPromptFocus?: () => void
-  onGenerate: (payload: LongGeneratePayload) => void
+  onGenerate: (payload: LongGeneratePayload) => Promise<boolean>
   onFinalize: () => void
   onReopen: () => void
 }) {
@@ -165,10 +165,10 @@ export function LongWorkspace({
     setRedoConfirmIndex(null)
   }
 
-  function submitGenerate() {
+  async function submitGenerate() {
     const nextSeed = randomize ? randomSeed() : seed
     if (randomize) setSeed(nextSeed)
-    onGenerate({
+    const ok = await onGenerate({
       prompt,
       duration: Number(duration),
       aspect,
@@ -176,6 +176,9 @@ export function LongWorkspace({
       lockPrompt,
       redoIndex: redoIndex ?? undefined,
     })
+    if (!ok) return
+    onPromptChange("")
+    setRedoIndex(null)
   }
 
   const submittedPreview = useMemo(
@@ -396,7 +399,7 @@ export function LongWorkspace({
                     setRedoSubmitOpen(true)
                     return
                   }
-                  submitGenerate()
+                  void submitGenerate()
                 }}
               >
                 {submitting ? (
@@ -484,7 +487,7 @@ export function LongWorkspace({
               variant="destructive"
               onClick={() => {
                 setRedoSubmitOpen(false)
-                submitGenerate()
+                void submitGenerate()
               }}
             >
               确定提交

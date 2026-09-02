@@ -523,9 +523,9 @@ export function StudioApp() {
     }
   }
 
-  async function submitLong(payload: LongGeneratePayload) {
-    if (!current || current.kind !== "long") return
-    if (!(await ensureEnvironment("long"))) return
+  async function submitLong(payload: LongGeneratePayload): Promise<boolean> {
+    if (!current || current.kind !== "long") return false
+    if (!(await ensureEnvironment("long"))) return false
     setSubmitting(true)
     try {
       const response = await fetch(`/api/jobs/${current.id}/segments`, {
@@ -544,7 +544,7 @@ export function StudioApp() {
         setFocusEnvironment(true)
         setSettingsOpen(true)
         toast.error(json.error ?? "环境还没就绪")
-        return
+        return false
       }
       if (!response.ok || !json.job) {
         toast.error(json.error ?? "提交失败")
@@ -552,7 +552,7 @@ export function StudioApp() {
           setCurrent(json.job)
           setJobs((list) => [json.job!, ...list.filter((item) => item.id !== json.job!.id)])
         }
-        return
+        return false
       }
       if (json.queue) setQueue(json.queue)
       setCurrent(json.job)
@@ -564,6 +564,10 @@ export function StudioApp() {
         )
       }
       listenJob(json.job.id)
+      return true
+    } catch {
+      toast.error("提交失败")
+      return false
     } finally {
       setSubmitting(false)
     }
@@ -1066,7 +1070,7 @@ export function StudioApp() {
                     textareaRef={textareaRef}
                     onPromptChange={setPrompt}
                     onPromptFocus={() => setGuideOpen(true)}
-                    onGenerate={(payload) => void submitLong(payload)}
+                    onGenerate={(payload) => submitLong(payload)}
                     onFinalize={() => void finalizeLong(true)}
                     onReopen={() => void finalizeLong(false)}
                   />
