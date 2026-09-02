@@ -83,7 +83,11 @@ async function watchJob(jobId: string) {
       const video = findVideoOutput(history?.outputs)
       if (video) {
         if (isLongJob(job)) {
-          await completeLongSegment(job, video)
+          const completed = await completeLongSegment(job, video)
+          if (!completed) {
+            await sleep(1000)
+            continue
+          }
         } else {
           const outputPath = await saveJobOutput(job, video)
           const frozen = withFrozenElapsed(job)
@@ -132,16 +136,22 @@ async function watchJob(jobId: string) {
 async function completeLongSegment(
   job: Job,
   video: { filename: string; subfolder?: string; type?: string }
-) {
+): Promise<boolean> {
   const frozen = withFrozenElapsed(job)
   const long = frozen.long
-  if (!long) return
+  if (!long) return false
+  const promptId = frozen.comfyPromptId
   const index =
-    long.segments.find((item) => item.comfyPromptId === frozen.comfyPromptId)
-      ?.index ?? long.segments.find((item) => item.status === "running")?.index
+    long.segments.find(
+      (item) =>
+        Boolean(promptId) &&
+        item.comfyPromptId === promptId &&
+        (item.status === "running" || item.status === "queued")
+    )?.index ??
+    long.segments.find((item) => item.status === "running")?.index
   if (!index) {
-    await failJob(frozen, "找不到当前正在生成的片段。")
-    return
+    // Stale Comfy history from a previous clip of this job. Ignore it.
+    return false
   }
 
   const outputPath = await saveJobOutput(frozen, video, segmentFileName(index))
@@ -187,6 +197,7 @@ async function completeLongSegment(
       nodeTitle: `第 ${index} 段完成`,
     },
   })
+  return true
 }
 
 async function failJob(job: Job, message: string) {
@@ -203,7 +214,9 @@ async function failJob(job: Job, message: string) {
       long: {
         ...frozen.long,
         segments: frozen.long.segments.map((item) =>
-          item.comfyPromptId === promptId || item.status === "running"
+          item.comfyPromptId === promptId ||
+          item.status === "running" ||
+          item.status === "queued"
             ? { ...item, status: "error" as const, error }
             : item
         ),

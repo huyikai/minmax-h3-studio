@@ -138,6 +138,8 @@ async function dispatchLong(job: Job) {
     error: undefined,
     startedAt: undefined,
     runElapsedMs: undefined,
+    comfyPromptId: undefined,
+    progress: undefined,
     prompt: segment.prompt,
     duration: segment.duration,
     seed: segment.seed,

@@ -167,6 +167,8 @@ export async function POST(
     clientId: busy ? job.clientId : newClientId(),
     enqueuedAt: busy ? job.enqueuedAt : now,
     error: busy ? job.error : undefined,
+    comfyPromptId: busy ? job.comfyPromptId : undefined,
+    progress: busy ? job.progress : undefined,
     long: {
       ...job.long,
       lockPrompt,
