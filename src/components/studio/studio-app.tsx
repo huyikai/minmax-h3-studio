@@ -46,6 +46,8 @@ import { TaskList } from "@/components/studio/task-list"
 import { QueuePanel } from "@/components/studio/queue-panel"
 import { MonitorPanel, type MonitorMode } from "@/components/studio/monitor-panel"
 import { LongWorkspace, type LongGeneratePayload } from "@/components/studio/long-workspace"
+import { ThemeToggle } from "@/components/studio/theme-toggle"
+import { WorkspaceSplit } from "@/components/studio/workspace-split"
 import type { WorkflowBundle } from "@/components/studio/types"
 import type { HealthStatus, LoraFormValue, MediaKind, PublicJob, StudioQueueSnapshot } from "@/lib/types"
 import type { WorkflowListItem } from "@/lib/default-workflows"
@@ -847,6 +849,7 @@ export function StudioApp() {
               ComfyUI
             </a>
           </Button>
+          <ThemeToggle />
           <Button
             type="button"
             size="sm"
@@ -937,11 +940,9 @@ export function StudioApp() {
           </section>
         </div>
       ) : (
-        <div
-          id="studio-main"
-          className="grid min-h-0 flex-1 grid-cols-1 overflow-hidden lg:grid-cols-[minmax(22rem,28rem)_minmax(0,1fr)]"
-        >
-          <section className="relative flex min-h-0 flex-col border-b lg:max-h-[calc(100dvh-3.75rem)] lg:border-r lg:border-b-0">
+        <WorkspaceSplit
+          left={
+          <section className="relative flex h-full min-h-0 min-w-0 flex-col border-b lg:max-h-[calc(100dvh-3.75rem)] lg:border-b-0">
             <div className="flex shrink-0 items-center gap-2 border-b px-3 py-2">
               <Button type="button" size="sm" variant="ghost" onClick={goHome}>
                 <ArrowLeftIcon data-icon="inline-start" />
@@ -1074,12 +1075,13 @@ export function StudioApp() {
               </div>
             </div>
           </section>
-
+          }
+          right={
           <section
             ref={(node) => {
               monitorRef.current = node
             }}
-            className="flex min-h-0 flex-col gap-4 p-4 lg:max-h-[calc(100dvh-3.75rem)] lg:overflow-hidden"
+            className="flex h-full min-h-0 min-w-0 flex-col gap-4 p-4 lg:max-h-[calc(100dvh-3.75rem)] lg:overflow-hidden"
           >
             <MonitorPanel
               job={liveJob}
@@ -1104,7 +1106,8 @@ export function StudioApp() {
               }
             />
           </section>
-        </div>
+          }
+        />
       )}
 
       {guide}

@@ -83,7 +83,7 @@ export function ReferenceSlots({ drafts, onAdd, onRemove }: ReferenceSlotsProps)
           {tagged.map((item) => (
             <div
               key={item.id}
-              className="relative rounded-md border border-border/80 bg-monitor/40 p-3"
+              className="relative rounded-md border border-border/80 bg-muted p-3"
             >
               <div className="mb-2 flex items-center justify-between gap-2">
                 <div className="flex min-w-0 items-center gap-2">
@@ -151,7 +151,7 @@ export function ReferenceSlots({ drafts, onAdd, onRemove }: ReferenceSlotsProps)
 
 function DropTray() {
   return (
-    <div className="flex min-h-28 flex-col items-center justify-center gap-2 rounded-md border border-dashed border-border/80 bg-monitor/40 p-3 text-center">
+    <div className="flex min-h-28 flex-col items-center justify-center gap-2 rounded-md border border-dashed border-border/80 bg-muted p-3 text-center">
       <ImagePlusIcon />
       <p className="max-w-[36ch] text-sm leading-relaxed text-muted-foreground text-pretty">
         拖入、粘贴图片、视频或音频。没有参考就只靠提示词。

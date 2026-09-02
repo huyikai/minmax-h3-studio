@@ -329,7 +329,7 @@ function GuideBody({
                   type="button"
                   disabled={disabled}
                   className={cn(
-                    "rounded-md border border-border/80 bg-monitor/40 p-2.5 text-left transition-colors",
+                    "rounded-md border border-border/80 bg-muted p-2.5 text-left transition-colors",
                     disabled
                       ? "cursor-not-allowed opacity-60"
                       : "hover:border-primary/50 hover:bg-primary/5"

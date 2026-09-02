@@ -59,7 +59,7 @@ function MediaSlotField({
       <LabelWithHelp label={slot.label}>{slot.help}</LabelWithHelp>
       <div
         className={cn(
-          "flex min-h-28 flex-col items-center justify-center gap-2 rounded-md border border-dashed border-border/80 bg-monitor/40 p-3 text-center",
+          "flex min-h-28 flex-col items-center justify-center gap-2 rounded-md border border-dashed border-border/80 bg-muted p-3 text-center",
           current && "items-stretch"
         )}
         onDragOver={(event) => event.preventDefault()}

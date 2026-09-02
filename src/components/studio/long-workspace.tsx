@@ -282,7 +282,7 @@ export function LongWorkspace({
               <LabelWithHelp label="实际提交">
                 公共锁定会写在 integrated_multimodal_description 开头。环境音和配乐不动。
               </LabelWithHelp>
-              <pre className="max-h-40 overflow-auto rounded-md border bg-monitor/40 p-3 font-mono text-[11px] leading-relaxed whitespace-pre-wrap">
+              <pre className="max-h-40 overflow-auto rounded-md border bg-muted p-3 font-mono text-[11px] leading-relaxed whitespace-pre-wrap">
                 {submittedPreview}
               </pre>
             </Field>
