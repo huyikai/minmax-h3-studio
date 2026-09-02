@@ -6,16 +6,15 @@ import { readWorkflowBundle, readWorkflowFile } from "@/lib/workflow-service"
 import { ensureJobWatch, writeSubmittedWorkflow } from "@/lib/runner"
 import { readSettings, writeSettings } from "@/lib/settings"
 import { fl2vaFile } from "@/lib/h3-models"
-import { isLongJob, lastSuccessfulSegment, LONG_T2V_FILE, patchLongChain, waitingSegment } from "@/lib/long-video"
+import { isLongJob, LONG_T2V_FILE, patchLongChain, waitingSegment, canDispatchLongSegment } from "@/lib/long-video"
 import { uploadStoredMedia } from "@/lib/job-media"
 
-export async function dispatchWaitingJob(job: Job) {
+export async function dispatchWaitingJob(job: Job, segmentIndex?: number) {
   const fresh = await getJob(job.id)
   if (!fresh) return
   if (isLongJob(fresh)) {
-    if (!waitingSegment(fresh.long)) return
     if (fresh.status === "queued" || fresh.status === "running") return
-    await dispatchLong(fresh)
+    await dispatchLong(fresh, segmentIndex)
     return
   }
   if (fresh.status !== "waiting") return
@@ -83,28 +82,15 @@ async function dispatchShort(job: Job) {
   }
 }
 
-async function dispatchLong(job: Job) {
-  const segment = waitingSegment(job.long)
+async function dispatchLong(job: Job, segmentIndex?: number) {
+  const segment =
+    typeof segmentIndex === "number"
+      ? job.long?.segments.find(
+          (item) => item.index === segmentIndex && item.status === "waiting"
+        )
+      : waitingSegment(job.long)
   if (!job.long || !segment) return
-  if (segment.index > 1 && !lastSuccessfulSegment(job.long)) {
-    const message = `第 ${segment.index - 1} 段还没有成功，不能开这一段。`
-    await upsertJob({
-      ...job,
-      status: "error",
-      error: message,
-      long: {
-        ...job.long,
-        segments: job.long.segments.map((item) =>
-          item.index === segment.index
-            ? { ...item, status: "error" as const, error: message }
-            : item
-        ),
-      },
-    })
-    const { pumpQueue } = await import("@/lib/studio-queue")
-    await pumpQueue()
-    return
-  }
+  if (!canDispatchLongSegment(job.long, segment.index)) return
   const settings = await readSettings()
   const bundle = await readWorkflowBundle(LONG_T2V_FILE)
   const { data } = await readWorkflowFile(LONG_T2V_FILE)
@@ -118,7 +104,7 @@ async function dispatchLong(job: Job) {
         height: job.height,
         seed: segment.seed,
         loras: [],
-        steps: 20,
+        steps: job.steps ?? 20,
       }),
       fl2vaFile(settings.h3UnetPrecision).filename
     ),

@@ -1,5 +1,5 @@
 import { getJob, toPublicJob, upsertJob } from "@/lib/jobs"
-import { isLongJob, lastSuccessfulSegment } from "@/lib/long-video"
+import { isLongJob, lastSuccessfulSegment, hasUnfinishedSegments } from "@/lib/long-video"
 
 export const dynamic = "force-dynamic"
 
@@ -13,8 +13,8 @@ export async function POST(
   if (!isLongJob(job) || !job.long) {
     return Response.json({ error: "这不是长视频任务" }, { status: 400 })
   }
-  if (job.status === "queued" || job.status === "running" || job.status === "waiting") {
-    return Response.json({ error: "这一段还在生成或排队，不能定稿" }, { status: 409 })
+  if (job.status === "queued" || job.status === "running" || hasUnfinishedSegments(job.long)) {
+    return Response.json({ error: "还有排队、生成中或未开始的段，不能定稿" }, { status: 409 })
   }
 
   const body = (await request.json().catch(() => ({}))) as {

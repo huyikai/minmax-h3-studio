@@ -151,6 +151,7 @@ export type StudioQueueItem = {
   prompt: string
   enqueuedAt: string
   segmentIndex?: number
+  blocked?: boolean
 }
 
 export type StudioQueueSnapshot = {
@@ -248,6 +249,10 @@ export const RESOLUTION_PRESETS = [
 export type ResolutionPreset = (typeof RESOLUTION_PRESETS)[number]
 
 export const DURATION_OPTIONS = [5, 6, 7, 8, 10, 12, 15] as const
+
+export const LONG_STEP_OPTIONS = [16, 20, 25] as const
+
+export type LongStepOption = (typeof LONG_STEP_OPTIONS)[number]
 
 export const DEFAULT_SETTINGS: Settings = {
   comfyHost: "127.0.0.1",

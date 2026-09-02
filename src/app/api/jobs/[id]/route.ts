@@ -1,8 +1,6 @@
-import { getJob, isActiveStatus, removeJob, toPublicJob, upsertJob } from "@/lib/jobs"
+import { getJob, isActiveStatus, removeJob, toPublicJob } from "@/lib/jobs"
 import { ensureJobWatch } from "@/lib/runner"
-import { interrupt } from "@/lib/comfy"
-import { withFrozenElapsed } from "@/lib/job-timing"
-import { isLongJob } from "@/lib/long-video"
+import { stopActiveRun } from "@/lib/job-interrupt"
 import { pumpQueue } from "@/lib/studio-queue"
 
 export const dynamic = "force-dynamic"
@@ -29,36 +27,7 @@ export async function DELETE(
   const job = await getJob(id)
   if (!job) return Response.json({ error: "任务不存在" }, { status: 404 })
   if (isActiveStatus(job.status)) {
-    try {
-      await interrupt()
-    } catch {
-      // still mark interrupted
-    }
-    if (isLongJob(job) && job.long) {
-      const frozen = withFrozenElapsed(job)
-      const next = await upsertJob({
-        ...frozen,
-        status: "awaiting",
-        error: undefined,
-        long: {
-          ...frozen.long!,
-          segments: frozen.long!.segments.map((item) =>
-            item.comfyPromptId === frozen.comfyPromptId ||
-            item.status === "queued" ||
-            item.status === "running"
-              ? { ...item, status: "interrupted" as const, error: "已中断" }
-              : item
-          ),
-        },
-      })
-      await pumpQueue()
-      return Response.json({ job: toPublicJob(next) })
-    }
-    const next = await upsertJob({
-      ...withFrozenElapsed(job),
-      status: "interrupted",
-      error: "已中断",
-    })
+    const next = await stopActiveRun(job)
     await pumpQueue()
     return Response.json({ job: toPublicJob(next) })
   }

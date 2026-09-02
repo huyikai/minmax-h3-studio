@@ -1,11 +1,12 @@
 import type { Job, JobStatus, PublicJob } from "@/lib/types"
 import {
+  chainBreakSegment,
   chainDeliveredSeconds,
   formatApproxSeconds,
   isLongJob,
   lastSuccessfulSegment,
+  lastWaitingSegment,
   successfulSegments,
-  waitingSegment,
 } from "@/lib/long-video"
 
 export { isLongJob }
@@ -59,7 +60,9 @@ export function jobListMeta(job: PublicJob) {
 
 export function jobListPrompt(job: PublicJob) {
   if (job.kind === "long") {
-    const waiting = waitingSegment(job.long)
+    const broken = chainBreakSegment(job.long)
+    if (broken) return broken.prompt || "（长视频）"
+    const waiting = lastWaitingSegment(job.long)
     if (waiting) return waiting.prompt || "（长视频）"
     const last = lastSuccessfulSegment(job.long)
     return last?.prompt || job.prompt || job.long?.lockPrompt || "（长视频）"

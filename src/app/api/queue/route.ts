@@ -11,6 +11,7 @@ export async function POST(request: Request) {
   const body = (await request.json().catch(() => ({}))) as {
     action?: string
     jobId?: string
+    segmentIndex?: number
   }
   if (body.action === "resume") {
     const queue = await resumeQueue()
@@ -18,10 +19,14 @@ export async function POST(request: Request) {
   }
   if (body.action === "withdraw") {
     const jobId = String(body.jobId ?? "")
+    const segmentIndex =
+      typeof body.segmentIndex === "number" && Number.isInteger(body.segmentIndex)
+        ? body.segmentIndex
+        : undefined
     if (!jobId) {
       return Response.json({ error: "请指定任务" }, { status: 400 })
     }
-    const result = await withdrawWaiting(jobId)
+    const result = await withdrawWaiting(jobId, segmentIndex)
     if ("error" in result && result.error) {
       return Response.json({ error: result.error }, { status: result.status })
     }

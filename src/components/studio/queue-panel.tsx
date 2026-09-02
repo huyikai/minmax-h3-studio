@@ -3,6 +3,7 @@
 import { ListOrderedIcon } from "lucide-react"
 import { Button } from "@/components/ui/button"
 import type { PublicJob, StudioQueueSnapshot } from "@/lib/types"
+import { lastWaitingSegment } from "@/lib/long-video"
 import { cn } from "@/lib/utils"
 
 export function QueuePanel({
@@ -16,7 +17,7 @@ export function QueuePanel({
   jobs: PublicJob[]
   onOpen: (job: PublicJob) => void
   onResume: () => void
-  onWithdraw: (job: PublicJob) => void
+  onWithdraw: (job: PublicJob, segmentIndex?: number) => void
 }) {
   if (queue.items.length === 0) return null
 
@@ -42,6 +43,11 @@ export function QueuePanel({
         {queue.items.map((item, index) => {
           const job = jobs.find((row) => row.id === item.jobId)
           const running = item.state === "running"
+          const lastWaiting =
+            item.kind === "long" ? lastWaitingSegment(job?.long)?.index : undefined
+          const canWithdraw =
+            !running &&
+            (item.kind !== "long" || item.segmentIndex === lastWaiting)
           return (
             <li key={`${item.jobId}-${item.segmentIndex ?? "job"}`}>
               <div
@@ -61,24 +67,29 @@ export function QueuePanel({
                   }}
                 >
                   <span className="block text-xs font-medium">
-                    {running ? "正在生成" : "等待"} · {item.label}
+                    {running
+                      ? "正在生成"
+                      : item.blocked
+                        ? "等待前段"
+                        : "等待"}{" "}
+                    · {item.label}
                   </span>
                   <span className="mt-0.5 line-clamp-2 text-xs text-muted-foreground">
                     {item.prompt}
                   </span>
                 </button>
-                {running ? null : (
+                {canWithdraw ? (
                   <Button
                     type="button"
                     size="sm"
                     variant="ghost"
                     onClick={() => {
-                      if (job) onWithdraw(job)
+                      if (job) onWithdraw(job, item.segmentIndex)
                     }}
                   >
                     {item.kind === "long" ? "撤下" : "删除"}
                   </Button>
-                )}
+                ) : null}
               </div>
             </li>
           )

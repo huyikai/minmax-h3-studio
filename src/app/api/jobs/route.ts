@@ -160,6 +160,7 @@ async function createLongJob(form: FormData) {
     megapixels,
     width: resolution.width,
     height: resolution.height,
+    steps: 20,
     seed: 0,
     loras: [],
     clientId: newClientId(),

@@ -3,7 +3,12 @@ import fs from "node:fs/promises"
 import type { Job, StudioQueueItem, StudioQueueSnapshot } from "@/lib/types"
 import { getHealth } from "@/lib/comfy"
 import { getActiveJob, getJob, readJobs, upsertJob, removeJob } from "@/lib/jobs"
-import { isLongJob, waitingSegment } from "@/lib/long-video"
+import {
+  canDispatchLongSegment,
+  isLongJob,
+  lastWaitingSegment,
+  waitingSegments,
+} from "@/lib/long-video"
 import { dataDir, queueStatePath } from "@/lib/paths"
 import { dispatchWaitingJob } from "@/lib/dispatch-job"
 
@@ -60,19 +65,21 @@ export type QueueEntry = {
   job: Job
   enqueuedAt: string
   segmentIndex?: number
+  blocked?: boolean
 }
 
 export function waitingEntries(jobs: Job[]): QueueEntry[] {
   const entries: QueueEntry[] = []
   for (const job of jobs) {
     if (isLongJob(job)) {
-      const segment = waitingSegment(job.long)
-      if (!segment) continue
-      entries.push({
-        job,
-        enqueuedAt: segment.enqueuedAt ?? job.enqueuedAt ?? job.updatedAt,
-        segmentIndex: segment.index,
-      })
+      for (const segment of waitingSegments(job.long)) {
+        entries.push({
+          job,
+          enqueuedAt: segment.enqueuedAt ?? job.enqueuedAt ?? job.updatedAt,
+          segmentIndex: segment.index,
+          blocked: !canDispatchLongSegment(job.long, segment.index),
+        })
+      }
       continue
     }
     if (job.status === "waiting") {
@@ -93,7 +100,10 @@ function itemFromEntry(
   entry: QueueEntry,
   state: StudioQueueItem["state"]
 ): StudioQueueItem {
-  const segment = waitingSegment(entry.job.long)
+  const segment =
+    typeof entry.segmentIndex === "number"
+      ? entry.job.long?.segments.find((item) => item.index === entry.segmentIndex)
+      : undefined
   const prompt = isLongJob(entry.job)
     ? (segment?.prompt ?? entry.job.prompt)
     : entry.job.prompt
@@ -102,11 +112,12 @@ function itemFromEntry(
     kind: isLongJob(entry.job) ? "long" : "short",
     state,
     label: isLongJob(entry.job)
-      ? `长视频 · 第 ${entry.segmentIndex ?? segment?.index ?? "?"} 段`
+      ? `长视频 · 第 ${entry.segmentIndex ?? "?"} 段`
       : "短片",
     prompt: prompt || "（无提示词）",
     enqueuedAt: entry.enqueuedAt,
     segmentIndex: entry.segmentIndex,
+    blocked: entry.blocked,
   }
 }
 
@@ -156,10 +167,10 @@ async function pumpQueueInner() {
   const health = await getHealth()
   if (!health.ok || health.queueRemaining > 0) return
   const waiting = waitingEntries(await readJobs())
-  const head = waiting[0]
+  const head = waiting.find((entry) => !entry.blocked)
   if (!head) return
   try {
-    await dispatchWaitingJob(head.job)
+    await dispatchWaitingJob(head.job, head.segmentIndex)
   } catch {
     // Comfy 暂时交不上去时保持等待，下次再试。
   }
@@ -179,15 +190,25 @@ export async function resumeQueue() {
   return queueSnapshot()
 }
 
-export async function withdrawWaiting(jobId: string) {
+export async function withdrawWaiting(jobId: string, segmentIndex?: number) {
   const job = await getJob(jobId)
   if (!job) return { error: "任务不存在", status: 404 as const }
   if (isLongJob(job) && job.long) {
-    const segment = waitingSegment(job.long)
-    if (!segment) {
-      return { error: "这条长视频不在队列里", status: 409 as const }
+    const last = lastWaitingSegment(job.long)
+    if (!last) {
+      return { error: "这条长视频没有未开始的段", status: 409 as const }
+    }
+    if (segmentIndex !== undefined && segmentIndex !== last.index) {
+      return {
+        error: "只能撤下最后一个还没开始的段。要砍中间请重写那一段。",
+        status: 409 as const,
+      }
     }
     const busy = job.status === "queued" || job.status === "running"
+    const nextSegments = job.long.segments.filter((item) => item.index !== last.index)
+    const stillLocked = nextSegments.some(
+      (item) => item.status !== "voided" && item.index === 1
+    )
     const next = await upsertJob({
       ...job,
       status: busy ? job.status : "awaiting",
@@ -196,7 +217,8 @@ export async function withdrawWaiting(jobId: string) {
       comfyPromptId: busy ? job.comfyPromptId : undefined,
       long: {
         ...job.long,
-        segments: job.long.segments.filter((item) => item.status !== "waiting"),
+        aspectLocked: stillLocked,
+        segments: nextSegments,
       },
     })
     await pumpQueue()

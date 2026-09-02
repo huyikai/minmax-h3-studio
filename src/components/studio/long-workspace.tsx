@@ -24,17 +24,19 @@ import {
 } from "@/components/ui/field"
 import { ToggleGroup, ToggleGroupItem } from "@/components/ui/toggle-group"
 import { LabelWithHelp } from "@/components/studio/field-help"
-import { ASPECT_PRESETS, DURATION_OPTIONS } from "@/lib/types"
+import { ASPECT_PRESETS, DURATION_OPTIONS, LONG_STEP_OPTIONS } from "@/lib/types"
 import { ResolutionPicker } from "@/components/studio/resolution-picker"
 import type { PublicJob } from "@/lib/types"
 import { isBusyJob } from "@/lib/job-view"
 import {
+  canDispatchLongSegment,
+  hasUnfinishedSegments,
   lastSuccessfulSegment,
+  laterSegments,
   mergeLockIntoPrompt,
   nextClipIndex,
   retryableSegment,
   successfulSegments,
-  waitingSegment,
 } from "@/lib/long-video"
 import { cn } from "@/lib/utils"
 
@@ -69,19 +71,23 @@ function SegmentSummary({
   seed,
   status,
   prompt,
+  blocked,
 }: {
   index: number
   duration: number
   seed: number
   status: string
   prompt: string
+  blocked?: boolean
 }) {
   return (
     <>
       <span className="font-mono text-[11px] tabular-nums text-muted-foreground">
         第 {index} 段 · {duration}s · seed {seed}
       </span>
-      <span className="mt-0.5 block text-xs">{segmentStatusLabel(status)}</span>
+      <span className="mt-0.5 block text-xs">
+        {blocked && status === "waiting" ? "等待前段" : segmentStatusLabel(status)}
+      </span>
       <span className="mt-1 line-clamp-2 text-xs text-muted-foreground">
         {prompt || "（无提示词）"}
       </span>
@@ -96,6 +102,7 @@ export type LongGeneratePayload = {
   megapixels: number
   seed: number
   lockPrompt: string
+  steps: number
   redoIndex?: number
 }
 
@@ -126,17 +133,18 @@ export function LongWorkspace({
 }) {
   const long = job.long
   const busy = isBusyJob(job)
-  const queuedNext = Boolean(waitingSegment(long))
   const finalized = Boolean(long?.finalized)
   const aspectLocked = Boolean(long?.aspectLocked)
   const retry = retryableSegment(long)
   const nextIndex = nextClipIndex(long)
   const successCount = successfulSegments(long).length
+  const unfinished = hasUnfinishedSegments(long)
 
   const [lockPrompt, setLockPrompt] = useState(long?.lockPrompt ?? "")
   const [duration, setDuration] = useState("5")
   const [aspect, setAspect] = useState(job.aspect)
   const [megapixels, setMegapixels] = useState(job.megapixels ?? 0.98)
+  const [steps, setSteps] = useState(String(job.steps ?? 20))
   const [seed, setSeed] = useState(randomSeed())
   const [randomize, setRandomize] = useState(true)
   const [redoIndex, setRedoIndex] = useState<number | null>(null)
@@ -147,7 +155,8 @@ export function LongWorkspace({
     setLockPrompt(job.long?.lockPrompt ?? "")
     setAspect(job.aspect)
     setMegapixels(job.megapixels ?? 0.98)
-  }, [job.id, job.long?.lockPrompt, job.aspect, job.megapixels])
+    setSteps(String(job.steps ?? 20))
+  }, [job.id, job.long?.lockPrompt, job.aspect, job.megapixels, job.steps])
 
   useEffect(() => {
     onPromptChange("")
@@ -168,24 +177,19 @@ export function LongWorkspace({
 
   const lastSuccess = lastSuccessfulSegment(long)
   useEffect(() => {
-    if (!lastSuccess || retry || queuedNext || busy || finalized) return
+    if (!lastSuccess || retry || busy || finalized) return
+    if ((long?.segments ?? []).some((item) => item.status === "waiting")) return
     const completedPrompt = lastSuccess.prompt
     onPromptChange((prev) =>
       prev.trim() === completedPrompt.trim() ? "" : prev
     )
-  }, [lastSuccess?.index, lastSuccess?.status, lastSuccess?.prompt, retry?.index, queuedNext, busy, finalized, onPromptChange])
+  }, [lastSuccess?.index, lastSuccess?.status, lastSuccess?.prompt, retry?.index, busy, finalized, onPromptChange])
 
   const redoConfirmTail = (long?.segments ?? []).filter(
     (item) =>
       redoConfirmIndex !== null &&
       item.index > redoConfirmIndex &&
-      item.status === "success"
-  ).length
-  const redoSubmitTail = (long?.segments ?? []).filter(
-    (item) =>
-      redoIndex !== null &&
-      item.index > redoIndex &&
-      item.status === "success"
+      item.status !== "voided"
   ).length
 
   function beginRedo(index: number) {
@@ -209,7 +213,8 @@ export function LongWorkspace({
       megapixels,
       seed: nextSeed,
       lockPrompt,
-      redoIndex: redoIndex ?? undefined,
+      steps: Number(steps) || 20,
+      redoIndex: redoIndex ?? retry?.index,
     })
     if (!ok) return
     onPromptChange("")
@@ -221,8 +226,12 @@ export function LongWorkspace({
     [lockPrompt, prompt]
   )
   const targetIndex = redoIndex ?? nextIndex
-  const readOnly = queuedNext || finalized
-  const generateDisabled = readOnly || submitting || !prompt.trim()
+  const settingsLocked = aspectLocked && targetIndex > 1
+  const readOnly = finalized
+  const laterCount = laterSegments(long, targetIndex).length
+  const generateDisabled =
+    readOnly || submitting || !prompt.trim() || Boolean(retry && targetIndex > retry.index)
+  const needsSubmitConfirm = laterCount > 0 || redoIndex !== null
 
   return (
     <div className="flex min-h-0 flex-1 flex-col">
@@ -244,7 +253,7 @@ export function LongWorkspace({
 
           <Field>
             <LabelWithHelp label="已生成的段">
-              点已完成的段可在监视器过往段回看。重做某一段会作废它后面的段，潜变量文件可能还在，但不进这条链。
+              点已完成的段可在监视器过往段回看。重写某一段会丢掉它后面的输入、队列和成片。
             </LabelWithHelp>
             <ul className="flex flex-col gap-1.5">
               {(long?.segments ?? []).length === 0 ? (
@@ -252,7 +261,11 @@ export function LongWorkspace({
                   还没有段。下面写第 1 段。
                 </li>
               ) : (
-                (long?.segments ?? []).map((segment) => (
+                (long?.segments ?? []).map((segment) => {
+                  const blocked =
+                    segment.status === "waiting" &&
+                    !canDispatchLongSegment(long, segment.index)
+                  return (
                   <li
                     key={segment.index}
                     className={cn(
@@ -285,21 +298,23 @@ export function LongWorkspace({
                           seed={segment.seed}
                           status={segment.status}
                           prompt={segment.prompt}
+                          blocked={blocked}
                         />
                       </span>
                     )}
-                    {segment.status === "success" && !busy && !queuedNext && !finalized ? (
+                    {segment.status !== "voided" && !finalized ? (
                       <Button
                         type="button"
                         size="sm"
                         variant="ghost"
                         onClick={() => setRedoConfirmIndex(segment.index)}
                       >
-                        重做
+                        重写
                       </Button>
                     ) : null}
                   </li>
-                ))
+                  )
+                })
               )}
             </ul>
           </Field>
@@ -325,10 +340,12 @@ export function LongWorkspace({
             />
             <FieldDescription>
               {redoIndex
-                ? `将重做第 ${redoIndex} 段，并作废后面的段。`
+                ? `将重写第 ${redoIndex} 段，并丢掉后面的段。重新提交后排到队尾。`
                 : retry
-                  ? `重提第 ${retry.index} 段。`
-                  : `生成第 ${targetIndex} 段。不能跳段。`}
+                  ? laterCount > 0
+                    ? `第 ${retry.index} 段失败或中断，后面的段先挂着。重提会丢掉后面，并排到队尾。`
+                    : `重提第 ${retry.index} 段。`
+                  : `生成第 ${targetIndex} 段，提交后进入队列。`}
             </FieldDescription>
           </Field>
 
@@ -372,7 +389,7 @@ export function LongWorkspace({
 
           <Field>
             <LabelWithHelp label="画幅">
-              第一段成功后锁定。整条链必须同一分辨率，潜变量不能缩放。
+              第一段提交后锁定。重写第 1 段时可改画幅、清晰度和步数。整条链必须同一分辨率。
             </LabelWithHelp>
             <ToggleGroup
               type="single"
@@ -383,7 +400,7 @@ export function LongWorkspace({
               variant="outline"
               size="sm"
               className="flex-wrap"
-              disabled={readOnly || aspectLocked}
+              disabled={readOnly || settingsLocked}
             >
               {ASPECT_PRESETS.map((item) => (
                 <ToggleGroupItem
@@ -400,9 +417,36 @@ export function LongWorkspace({
           <ResolutionPicker
             aspect={aspect}
             megapixels={megapixels}
-            disabled={readOnly || aspectLocked}
+            disabled={readOnly || settingsLocked}
             onChange={setMegapixels}
           />
+
+          <Field>
+            <LabelWithHelp label="步数">
+              第 1 段可选 16 / 20 / 25，默认 20。后续段沿用，不能单独改。
+            </LabelWithHelp>
+            <ToggleGroup
+              type="single"
+              value={targetIndex > 1 ? String(job.steps ?? 20) : steps}
+              onValueChange={(value) => {
+                if (value) setSteps(value)
+              }}
+              variant="outline"
+              size="sm"
+              className="flex-wrap"
+              disabled={readOnly || targetIndex > 1}
+            >
+              {LONG_STEP_OPTIONS.map((item) => (
+                <ToggleGroupItem
+                  key={item}
+                  value={String(item)}
+                  className="font-mono tabular-nums data-[state=on]:border-primary/70 data-[state=on]:bg-primary/15"
+                >
+                  {item}
+                </ToggleGroupItem>
+              ))}
+            </ToggleGroup>
+          </Field>
 
           <Field>
             <LabelWithHelp htmlFor="long-seed" label="Seed">
@@ -433,13 +477,13 @@ export function LongWorkspace({
 
       <div className="flex shrink-0 flex-col gap-3 border-t px-4 py-3">
         <p className="text-xs leading-relaxed text-muted-foreground text-pretty">
-          {queuedNext
-            ? "下一段已在队列里。要改词请先从队列撤下。"
+          {retry
+            ? `第 ${retry.index} 段需要重写。后面已排队的段先挂着，确认后会丢掉并排到队尾。`
             : busy
-              ? "监视器看着这一段。再点生成会把下一段排到队列后面。"
+              ? "监视器看着当前段。再点生成会把下一段排到队尾，不必等这一段跑完。"
               : finalized
                 ? "已定稿。撤销后仍从最后成功的一段接着写。"
-                : "官方文生、20 步、不用 Turbo。生成后是待续，点定稿才算完成。"}
+                : "可以连续往队列里加段。有未完成的段时不能定稿。"}
         </p>
         <div className="flex flex-col gap-2">
           {finalized ? (
@@ -454,7 +498,7 @@ export function LongWorkspace({
                 className="h-11 w-full"
                 disabled={generateDisabled}
                 onClick={() => {
-                  if (redoIndex) {
+                  if (needsSubmitConfirm) {
                     setRedoSubmitOpen(true)
                     return
                   }
@@ -472,13 +516,13 @@ export function LongWorkspace({
                 <Button
                   type="button"
                   variant="outline"
-                  disabled={busy || queuedNext || submitting}
+                  disabled={unfinished || submitting}
                   onClick={onFinalize}
                 >
                   结束并定稿
                 </Button>
               ) : null}
-              {redoIndex ? (
+              {redoIndex && !retry ? (
                 <Button
                   type="button"
                   variant="ghost"
@@ -487,9 +531,12 @@ export function LongWorkspace({
                     onPromptChange("")
                     setRandomize(true)
                     setSeed(randomSeed())
+                    setAspect(job.aspect)
+                    setMegapixels(job.megapixels ?? 0.98)
+                    setSteps(String(job.steps ?? 20))
                   }}
                 >
-                  取消重做，改为写下一段
+                  取消重写，改为写下一段
                 </Button>
               ) : null}
             </>
@@ -506,11 +553,11 @@ export function LongWorkspace({
         <AlertDialogContent>
           <AlertDialogHeader>
             <AlertDialogTitle>
-              {redoConfirmIndex ? `重做第 ${redoConfirmIndex} 段？` : "重做这一段？"}
+              {redoConfirmIndex ? `重写第 ${redoConfirmIndex} 段？` : "重写这一段？"}
             </AlertDialogTitle>
             <AlertDialogDescription>
               {redoConfirmTail > 0
-                ? `会作废后面 ${redoConfirmTail} 段已成功的成片，它们不再进这条链。潜变量文件可能还在，但不能接着用。`
+                ? `会丢掉后面 ${redoConfirmTail} 段（含队列里未开始的和已成功的）。潜变量文件可能还在，但不能接着用。点确定后仍可改提示词，再提交会排到队尾。`
                 : `将用新生成替换第 ${redoConfirmIndex ?? ""} 段。点确定后仍可改提示词，再点生成才会提交。`}
             </AlertDialogDescription>
           </AlertDialogHeader>
@@ -522,7 +569,7 @@ export function LongWorkspace({
                 if (redoConfirmIndex) beginRedo(redoConfirmIndex)
               }}
             >
-              确定重做
+              确定重写
             </AlertDialogAction>
           </AlertDialogFooter>
         </AlertDialogContent>
@@ -532,12 +579,12 @@ export function LongWorkspace({
         <AlertDialogContent>
           <AlertDialogHeader>
             <AlertDialogTitle>
-              {redoIndex ? `提交重做第 ${redoIndex} 段？` : "提交重做？"}
+              {`提交重写第 ${redoIndex ?? retry?.index ?? targetIndex} 段？`}
             </AlertDialogTitle>
             <AlertDialogDescription>
-              {redoSubmitTail > 0
-                ? `提交后会作废后面 ${redoSubmitTail} 段。此操作不能从列表里撤销。`
-                : "提交后会按当前提示词重新生成这一段，替换现有成片。"}
+              {laterCount > 0
+                ? `提交后会丢掉后面 ${laterCount} 段，这一段重新排到队尾。此操作不能从列表里撤销。`
+                : "提交后会按当前提示词重新生成这一段，替换现有成片，并排到队尾。"}
             </AlertDialogDescription>
           </AlertDialogHeader>
           <AlertDialogFooter>

@@ -68,12 +68,64 @@ export function lastSuccessfulSegment(state: LongVideoState | undefined) {
   return items[items.length - 1]
 }
 
+export function liveSegments(state: LongVideoState | undefined) {
+  return (state?.segments ?? [])
+    .filter((item) => item.status !== "voided")
+    .slice()
+    .sort((a, b) => a.index - b.index)
+}
+
+export function waitingSegments(state: LongVideoState | undefined) {
+  return liveSegments(state).filter((item) => item.status === "waiting")
+}
+
 export function waitingSegment(state: LongVideoState | undefined) {
-  return (state?.segments ?? []).find((item) => item.status === "waiting")
+  return waitingSegments(state)[0]
+}
+
+export function lastWaitingSegment(state: LongVideoState | undefined) {
+  const items = waitingSegments(state)
+  return items[items.length - 1]
+}
+
+export function laterSegments(state: LongVideoState | undefined, index: number) {
+  return liveSegments(state).filter((item) => item.index > index)
+}
+
+export function chainBreakSegment(state: LongVideoState | undefined) {
+  return liveSegments(state).find(
+    (item) => item.status === "error" || item.status === "interrupted"
+  )
 }
 
 export function activeLongSegment(state: LongVideoState | undefined) {
-  return (state?.segments ?? []).find(
+  const items = state?.segments ?? []
+  return (
+    items.find((item) => item.status === "running") ??
+    items.find((item) => item.status === "queued") ??
+    items.find(
+      (item) =>
+        item.status === "waiting" && canDispatchLongSegment(state, item.index)
+    ) ??
+    items.find((item) => item.status === "waiting")
+  )
+}
+
+export function retryableSegment(state: LongVideoState | undefined) {
+  return chainBreakSegment(state)
+}
+
+export function canDispatchLongSegment(
+  state: LongVideoState | undefined,
+  index: number
+) {
+  if (index <= 1) return true
+  const previous = (state?.segments ?? []).find((item) => item.index === index - 1)
+  return previous?.status === "success"
+}
+
+export function hasUnfinishedSegments(state: LongVideoState | undefined) {
+  return liveSegments(state).some(
     (item) =>
       item.status === "waiting" ||
       item.status === "queued" ||
@@ -81,22 +133,15 @@ export function activeLongSegment(state: LongVideoState | undefined) {
   )
 }
 
-export function retryableSegment(state: LongVideoState | undefined) {
-  const segments = state?.segments ?? []
-  const last = segments[segments.length - 1]
-  if (!last) return undefined
-  if (last.status === "error" || last.status === "interrupted") return last
-  return undefined
-}
-
 export function nextClipIndex(state: LongVideoState | undefined) {
-  const retry = retryableSegment(state)
-  if (retry) return retry.index
-  const occupied = (state?.segments ?? []).filter((item) =>
-    item.status === "success" ||
-    item.status === "running" ||
-    item.status === "queued" ||
-    item.status === "waiting"
+  const broken = chainBreakSegment(state)
+  if (broken) return broken.index
+  const occupied = liveSegments(state).filter(
+    (item) =>
+      item.status === "success" ||
+      item.status === "running" ||
+      item.status === "queued" ||
+      item.status === "waiting"
   )
   if (occupied.length === 0) return 1
   return Math.max(...occupied.map((item) => item.index)) + 1

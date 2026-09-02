@@ -65,7 +65,7 @@ import {
 import { resolveGuideMode } from "@/lib/prompt-guide"
 import { normalizeLora } from "@/lib/lora"
 import { isBusyJob, isLongJob, isWaitingJob } from "@/lib/job-view"
-import { lastSuccessfulSegment, successfulSegments, waitingSegment } from "@/lib/long-video"
+import { lastSuccessfulSegment, lastWaitingSegment, successfulSegments, waitingSegments } from "@/lib/long-video"
 import { cn } from "@/lib/utils"
 import { resolutionFromDimensions } from "@/lib/resolution"
 
@@ -800,11 +800,15 @@ export function StudioApp() {
     toast.message("队列已继续")
   }
 
-  async function withdrawQueueItem(job: PublicJob) {
+  async function withdrawQueueItem(job: PublicJob, segmentIndex?: number) {
     const response = await fetch("/api/queue", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ action: "withdraw", jobId: job.id }),
+      body: JSON.stringify({
+        action: "withdraw",
+        jobId: job.id,
+        segmentIndex,
+      }),
     })
     const json = (await response.json()) as {
       withdrawn?: string
@@ -1100,17 +1104,20 @@ export function StudioApp() {
               {queue.paused &&
               queue.remaining > 0 &&
               liveJob &&
-              (isWaitingJob(liveJob) || waitingSegment(liveJob.long)) ? (
+              (isWaitingJob(liveJob) || waitingSegments(liveJob.long).length > 0) ? (
                 <Button type="button" size="sm" onClick={() => void resumeQueue()}>
                   继续队列（{queue.remaining}）
                 </Button>
               ) : null}
-              {liveJob && (isWaitingJob(liveJob) || waitingSegment(liveJob.long)) ? (
+              {liveJob &&
+              (isWaitingJob(liveJob) || waitingSegments(liveJob.long).length > 0) ? (
                 <Button
                   type="button"
                   size="sm"
                   variant="outline"
-                  onClick={() => void withdrawQueueItem(liveJob)}
+                  onClick={() =>
+                    void withdrawQueueItem(liveJob, lastWaitingSegment(liveJob.long)?.index)
+                  }
                 >
                   {isLongJob(liveJob) ? "从队列撤下" : "从队列删除"}
                 </Button>
