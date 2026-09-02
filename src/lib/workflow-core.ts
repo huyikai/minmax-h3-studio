@@ -692,9 +692,10 @@ export function extractValues(
 
   const width = typeof widthRaw === "number" ? widthRaw : 1344
   const height = typeof heightRaw === "number" ? heightRaw : 768
-  const preset = ASPECT_PRESETS.find(
-    (item) => item.width === width && item.height === height
-  )
+  const preset = ASPECT_PRESETS.find((item) => {
+    const ratio = item.ratioWidth / item.ratioHeight
+    return Math.abs(width / height - ratio) < 0.01
+  })
 
   let duration = 5
   if (typeof durationRaw === "number") {

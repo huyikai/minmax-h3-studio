@@ -67,6 +67,7 @@ import { normalizeLora } from "@/lib/lora"
 import { isBusyJob, isLongJob, isWaitingJob } from "@/lib/job-view"
 import { lastSuccessfulSegment, successfulSegments, waitingSegment } from "@/lib/long-video"
 import { cn } from "@/lib/utils"
+import { resolutionFromDimensions } from "@/lib/resolution"
 
 function emptyQueue(): StudioQueueSnapshot {
   return { paused: false, remaining: 0, items: [] }
@@ -140,6 +141,7 @@ export function StudioApp() {
   const [prompt, setPrompt] = useState("")
   const [duration, setDuration] = useState("5")
   const [aspect, setAspect] = useState("16:9")
+  const [megapixels, setMegapixels] = useState(0.98)
   const [seed, setSeed] = useState(1)
   const [randomize, setRandomize] = useState(true)
   const [steps, setSteps] = useState("")
@@ -236,6 +238,9 @@ export function StudioApp() {
     setPrompt(next.values.prompt)
     setDuration(String(Math.round(next.values.duration) || 5))
     setAspect(next.values.aspect)
+    setMegapixels(
+      resolutionFromDimensions(next.values.aspect, next.values.width, next.values.height) ?? 0.98
+    )
     setSeed(next.values.seed || randomSeed())
     setSteps(next.values.steps !== undefined ? String(next.values.steps) : "")
     setCfg(next.values.cfg !== undefined ? String(next.values.cfg) : "")
@@ -515,6 +520,7 @@ export function StudioApp() {
       form.set("prompt", prompt)
       form.set("duration", duration)
       form.set("aspect", aspect)
+      form.set("megapixels", String(megapixels))
       form.set("seed", String(randomize ? randomSeed() : seed))
       form.set("loras", JSON.stringify(loras))
       if (steps && bundle?.mapping.steps) form.set("steps", steps)
@@ -621,6 +627,11 @@ export function StudioApp() {
     setPrompt(job.prompt)
     setDuration(String(job.duration))
     setAspect(job.aspect)
+    setMegapixels(
+      job.megapixels ??
+        resolutionFromDimensions(job.aspect, job.width, job.height) ??
+        0.98
+    )
     setSeed(job.seed)
     setRandomize(false)
     setSteps(job.steps !== undefined ? String(job.steps) : "")
@@ -646,6 +657,7 @@ export function StudioApp() {
     const form = new FormData()
     form.set("kind", "long")
     form.set("aspect", aspect)
+    form.set("megapixels", String(megapixels))
     const response = await fetch("/api/jobs", { method: "POST", body: form })
     const json = (await response.json()) as { job?: PublicJob; error?: string }
     if (!response.ok || !json.job) {
@@ -1138,6 +1150,7 @@ export function StudioApp() {
                         textareaRef={textareaRef}
                         duration={duration}
                         aspect={aspect}
+                        megapixels={megapixels}
                         seed={seed}
                         randomize={randomize}
                         steps={steps}
@@ -1158,6 +1171,7 @@ export function StudioApp() {
                         onPromptFocus={() => setGuideOpen(true)}
                         onDurationChange={setDuration}
                         onAspectChange={setAspect}
+                        onMegapixelsChange={setMegapixels}
                         onSeedChange={setSeed}
                         onRandomizeChange={setRandomize}
                         onStepsChange={setSteps}

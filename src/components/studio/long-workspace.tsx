@@ -25,6 +25,7 @@ import {
 import { ToggleGroup, ToggleGroupItem } from "@/components/ui/toggle-group"
 import { LabelWithHelp } from "@/components/studio/field-help"
 import { ASPECT_PRESETS, DURATION_OPTIONS } from "@/lib/types"
+import { ResolutionPicker } from "@/components/studio/resolution-picker"
 import type { PublicJob } from "@/lib/types"
 import { isBusyJob } from "@/lib/job-view"
 import {
@@ -92,6 +93,7 @@ export type LongGeneratePayload = {
   prompt: string
   duration: number
   aspect: string
+  megapixels: number
   seed: number
   lockPrompt: string
   redoIndex?: number
@@ -134,6 +136,7 @@ export function LongWorkspace({
   const [lockPrompt, setLockPrompt] = useState(long?.lockPrompt ?? "")
   const [duration, setDuration] = useState("5")
   const [aspect, setAspect] = useState(job.aspect)
+  const [megapixels, setMegapixels] = useState(job.megapixels ?? 0.98)
   const [seed, setSeed] = useState(randomSeed())
   const [randomize, setRandomize] = useState(true)
   const [redoIndex, setRedoIndex] = useState<number | null>(null)
@@ -143,7 +146,8 @@ export function LongWorkspace({
   useEffect(() => {
     setLockPrompt(job.long?.lockPrompt ?? "")
     setAspect(job.aspect)
-  }, [job.id, job.long?.lockPrompt, job.aspect])
+    setMegapixels(job.megapixels ?? 0.98)
+  }, [job.id, job.long?.lockPrompt, job.aspect, job.megapixels])
 
   useEffect(() => {
     onPromptChange("")
@@ -202,6 +206,7 @@ export function LongWorkspace({
       prompt,
       duration: Number(duration),
       aspect,
+      megapixels,
       seed: nextSeed,
       lockPrompt,
       redoIndex: redoIndex ?? undefined,
@@ -391,6 +396,13 @@ export function LongWorkspace({
               ))}
             </ToggleGroup>
           </Field>
+
+          <ResolutionPicker
+            aspect={aspect}
+            megapixels={megapixels}
+            disabled={readOnly || aspectLocked}
+            onChange={setMegapixels}
+          />
 
           <Field>
             <LabelWithHelp htmlFor="long-seed" label="Seed">

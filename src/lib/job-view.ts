@@ -40,13 +40,21 @@ export function statusLabel(job: Pick<Job, "status" | "kind">) {
   }
 }
 
+function resolutionMeta(job: PublicJob) {
+  const pixels = `${job.width}×${job.height}`
+  return job.megapixels !== undefined
+    ? `${job.megapixels === 0.98 ? "0.98" : job.megapixels.toFixed(1)} MP · ${pixels}`
+    : pixels
+}
+
 export function jobListMeta(job: PublicJob) {
+  const resolution = resolutionMeta(job)
   if (job.kind === "long") {
     const count = successfulSegments(job.long).length
     const approx = formatApproxSeconds(chainDeliveredSeconds(job.long))
-    return [`已做 ${count} 段`, approx, job.aspect]
+    return [`已做 ${count} 段`, approx, job.aspect, resolution]
   }
-  return [`${job.duration}s`, job.aspect]
+  return [`${job.duration}s`, job.aspect, resolution]
 }
 
 export function jobListPrompt(job: PublicJob) {

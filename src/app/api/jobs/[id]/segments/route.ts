@@ -1,4 +1,5 @@
 import { ASPECT_PRESETS, DURATION_OPTIONS } from "@/lib/types"
+import { resolutionFor, resolutionPreset } from "@/lib/resolution"
 import type { Job, LongSegment } from "@/lib/types"
 import { getJob, toPublicJob, upsertJob } from "@/lib/jobs"
 import { evaluateEnvironment } from "@/lib/environment"
@@ -19,6 +20,7 @@ type Body = {
   prompt?: string
   duration?: number
   aspect?: string
+  megapixels?: number
   seed?: number
   lockPrompt?: string
   redoIndex?: number
@@ -116,20 +118,25 @@ export async function POST(
   }
 
   let aspect = job.aspect
+  let megapixels = job.megapixels ?? 0.98
   let width = job.width
   let height = job.height
-  if (body.aspect && body.aspect !== job.aspect) {
+  const requestedAspect = body.aspect && body.aspect !== job.aspect
+  const requestedMegapixels = body.megapixels !== undefined && body.megapixels !== megapixels
+  if (requestedAspect || requestedMegapixels) {
     if (job.long.aspectLocked) {
       return Response.json(
-        { error: "第一段成功后画幅已锁定，整条链必须同一分辨率" },
+        { error: "第一段成功后画幅和清晰度已锁定，整条链必须同一分辨率" },
         { status: 400 }
       )
     }
     const preset =
-      ASPECT_PRESETS.find((item) => item.id === body.aspect) ?? ASPECT_PRESETS[0]
+      ASPECT_PRESETS.find((item) => item.id === (body.aspect ?? job.aspect)) ?? ASPECT_PRESETS[0]
     aspect = preset.id
-    width = preset.width
-    height = preset.height
+    megapixels = resolutionPreset(body.megapixels) ?? megapixels
+    const resolution = resolutionFor(aspect, megapixels)
+    width = resolution.width
+    height = resolution.height
   }
 
   const env = await evaluateEnvironment("long")
@@ -161,6 +168,7 @@ export async function POST(
     prompt: busy ? job.prompt : prompt,
     duration: busy ? job.duration : duration,
     aspect,
+    megapixels,
     width,
     height,
     seed: busy ? job.seed : seed,

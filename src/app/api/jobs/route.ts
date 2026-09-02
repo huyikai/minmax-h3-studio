@@ -1,5 +1,6 @@
 import { randomUUID } from "node:crypto"
 import { ASPECT_PRESETS } from "@/lib/types"
+import { resolutionFor, resolutionPreset } from "@/lib/resolution"
 import type { Job, LoraFormValue } from "@/lib/types"
 import { normalizeLora } from "@/lib/lora"
 import { listJobs, removeJobs, toPublicJob, upsertJob, getJob } from "@/lib/jobs"
@@ -57,6 +58,7 @@ export async function POST(request: Request) {
   const prompt = String(form.get("prompt") ?? "").trim()
   const duration = Number(form.get("duration") ?? 5)
   const aspect = String(form.get("aspect") ?? "16:9")
+  const megapixels = resolutionPreset(form.get("megapixels")) ?? 0.98
   const seed = Number(form.get("seed") ?? 1)
   const stepsRaw = form.get("steps")
   const cfgRaw = form.get("cfg")
@@ -71,6 +73,7 @@ export async function POST(request: Request) {
 
   const preset =
     ASPECT_PRESETS.find((item) => item.id === aspect) ?? ASPECT_PRESETS[0]
+  const resolution = resolutionFor(preset.id, megapixels)
 
   const line = environmentLineFor(workflowFile)
   const env = await evaluateEnvironment(line)
@@ -112,8 +115,9 @@ export async function POST(request: Request) {
     prompt,
     duration,
     aspect: preset.id,
-    width: preset.width,
-    height: preset.height,
+    megapixels,
+    width: resolution.width,
+    height: resolution.height,
     seed: Number.isFinite(seed) ? seed : Math.floor(Math.random() * 1_000_000_000),
     firstFrameName,
     lastFrameName,
@@ -137,9 +141,11 @@ export async function POST(request: Request) {
 
 async function createLongJob(form: FormData) {
   const aspect = String(form.get("aspect") ?? "16:9")
+  const megapixels = resolutionPreset(form.get("megapixels")) ?? 0.98
   const lockPrompt = String(form.get("lockPrompt") ?? "")
   const preset =
     ASPECT_PRESETS.find((item) => item.id === aspect) ?? ASPECT_PRESETS[0]
+  const resolution = resolutionFor(preset.id, megapixels)
   const now = new Date().toISOString()
   const job: Job = {
     id: randomUUID(),
@@ -151,8 +157,9 @@ async function createLongJob(form: FormData) {
     prompt: "",
     duration: 0,
     aspect: preset.id,
-    width: preset.width,
-    height: preset.height,
+    megapixels,
+    width: resolution.width,
+    height: resolution.height,
     seed: 0,
     loras: [],
     clientId: newClientId(),

@@ -185,6 +185,7 @@ export type Job = {
   prompt: string
   duration: number
   aspect: string
+  megapixels?: number
   width: number
   height: number
   seed: number
@@ -224,12 +225,27 @@ export type HealthStatus = {
 }
 
 export const ASPECT_PRESETS = [
-  { id: "16:9", label: "16:9", width: 1344, height: 768 },
-  { id: "9:16", label: "9:16", width: 768, height: 1344 },
-  { id: "1:1", label: "1:1", width: 768, height: 768 },
-  { id: "4:3", label: "4:3", width: 1024, height: 768 },
-  { id: "3:4", label: "3:4", width: 768, height: 1024 },
+  { id: "16:9", label: "16:9", ratioWidth: 16, ratioHeight: 9 },
+  { id: "9:16", label: "9:16", ratioWidth: 9, ratioHeight: 16 },
+  { id: "1:1", label: "1:1", ratioWidth: 1, ratioHeight: 1 },
+  { id: "4:3", label: "4:3", ratioWidth: 4, ratioHeight: 3 },
+  { id: "3:4", label: "3:4", ratioWidth: 3, ratioHeight: 4 },
 ] as const
+
+export const RESOLUTION_PRESETS = [
+  0.4,
+  0.5,
+  0.6,
+  0.7,
+  0.8,
+  0.9,
+  0.98,
+  1.2,
+  1.5,
+  2.0,
+] as const
+
+export type ResolutionPreset = (typeof RESOLUTION_PRESETS)[number]
 
 export const DURATION_OPTIONS = [5, 6, 7, 8, 10, 12, 15] as const
 

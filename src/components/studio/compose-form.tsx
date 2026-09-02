@@ -28,6 +28,7 @@ import {
 } from "@/components/studio/reference-slots"
 import type { LoraFormValue, MediaKind, MediaSlot } from "@/lib/types"
 import { ASPECT_PRESETS, DURATION_OPTIONS } from "@/lib/types"
+import { ResolutionPicker } from "@/components/studio/resolution-picker"
 import {
   clampLoraStrength,
   loraKind,
@@ -57,6 +58,7 @@ export function ComposeForm({
   textareaRef,
   duration,
   aspect,
+  megapixels,
   seed,
   randomize,
   steps,
@@ -74,6 +76,7 @@ export function ComposeForm({
   onPromptFocus,
   onDurationChange,
   onAspectChange,
+  onMegapixelsChange,
   onSeedChange,
   onRandomizeChange,
   onStepsChange,
@@ -94,6 +97,7 @@ export function ComposeForm({
   textareaRef: React.RefObject<HTMLTextAreaElement | null>
   duration: string
   aspect: string
+  megapixels: number
   seed: number
   randomize: boolean
   steps: string
@@ -111,6 +115,7 @@ export function ComposeForm({
   onPromptFocus?: () => void
   onDurationChange: (value: string) => void
   onAspectChange: (value: string) => void
+  onMegapixelsChange: (value: number) => void
   onSeedChange: (value: number) => void
   onRandomizeChange: (value: boolean) => void
   onStepsChange: (value: string) => void
@@ -286,6 +291,13 @@ export function ComposeForm({
               ))}
             </ToggleGroup>
           </Field>
+
+          <ResolutionPicker
+            aspect={aspect}
+            megapixels={megapixels}
+            disabled={readOnly}
+            onChange={onMegapixelsChange}
+          />
 
           <Field>
             <LabelWithHelp htmlFor="seed" label="Seed">
