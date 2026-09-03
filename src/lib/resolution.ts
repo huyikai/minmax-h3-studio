@@ -36,3 +36,16 @@ export function resolutionFromDimensions(
     return result.width === width && result.height === height
   })
 }
+
+export function resolutionLoadHint(megapixels: number, oversize: boolean) {
+  if (megapixels >= 2) {
+    return "最高负载：显存和耗时压力最大，建议确认机器余量后再用，质量提升不保证。"
+  }
+  if (megapixels >= 1.5) {
+    return "高负载：比原生画布更吃显存，生成更慢，显存不足可能失败。"
+  }
+  if (megapixels > 1 || oversize) {
+    return "高于原生画布：显存和耗时会上升，细节提升不保证。"
+  }
+  return undefined
+}

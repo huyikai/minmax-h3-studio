@@ -2,10 +2,12 @@ import type { Job, JobStatus, PublicJob } from "@/lib/types"
 import {
   chainBreakSegment,
   chainDeliveredSeconds,
+  expectedLongSegmentIndex,
   formatApproxSeconds,
   isLongJob,
   lastSuccessfulSegment,
   lastWaitingSegment,
+  runningLongSegment,
   successfulSegments,
 } from "@/lib/long-video"
 
@@ -52,10 +54,31 @@ export function jobListMeta(job: PublicJob) {
   const resolution = resolutionMeta(job)
   if (job.kind === "long") {
     const count = successfulSegments(job.long).length
+    const running = runningLongSegment(job.long)
+    const broken = chainBreakSegment(job.long)
+    const current = running?.index ?? broken?.index
+    const expected = Math.max(1, expectedLongSegmentIndex(job.long))
     const approx = formatApproxSeconds(chainDeliveredSeconds(job.long))
-    return [`已做 ${count} 段`, approx, job.aspect, resolution]
+    return [
+      `已做 ${count} 段`,
+      current ? `当前第 ${current} 段` : `预计到第 ${expected} 段`,
+      approx,
+      job.aspect,
+      resolution,
+    ]
   }
   return [`${job.duration}s`, job.aspect, resolution]
+}
+
+export function jobListFailure(job: PublicJob) {
+  if (job.kind === "long") {
+    const broken = chainBreakSegment(job.long)
+    if (broken) return `失败：第 ${broken.index} 段 ${broken.error ?? "生成失败"}`
+  }
+  if (job.status === "error" || job.status === "interrupted") {
+    return `${statusLabel(job)}：${job.error ?? "没有错误详情"}`
+  }
+  return undefined
 }
 
 export function jobListPrompt(job: PublicJob) {

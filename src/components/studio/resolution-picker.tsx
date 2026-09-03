@@ -4,7 +4,7 @@ import { ToggleGroup, ToggleGroupItem } from "@/components/ui/toggle-group"
 import { LabelWithHelp } from "@/components/studio/field-help"
 import { Field, FieldDescription } from "@/components/ui/field"
 import { RESOLUTION_PRESETS } from "@/lib/types"
-import { resolutionFor } from "@/lib/resolution"
+import { resolutionFor, resolutionLoadHint } from "@/lib/resolution"
 
 export function ResolutionPicker({
   aspect,
@@ -18,6 +18,7 @@ export function ResolutionPicker({
   onChange: (value: number) => void
 }) {
   const resolution = resolutionFor(aspect, megapixels)
+  const loadHint = resolutionLoadHint(megapixels, resolution.oversize)
 
   return (
     <Field>
@@ -48,7 +49,11 @@ export function ResolutionPicker({
       </ToggleGroup>
       <FieldDescription className="font-mono tabular-nums">
         {resolution.width}×{resolution.height}
-        {resolution.oversize ? (
+        {loadHint ? (
+          <span className="ml-2 font-sans text-amber-700 dark:text-amber-300">
+            {loadHint}
+          </span>
+        ) : resolution.oversize ? (
           <span className="ml-2 font-sans text-muted-foreground">
             超过原生画布，更耗显存和时间，细节不一定更好。
           </span>

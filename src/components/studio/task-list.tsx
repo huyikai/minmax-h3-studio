@@ -19,6 +19,7 @@ import { cn } from "@/lib/utils"
 import type { PublicJob } from "@/lib/types"
 import {
   isBusyJob,
+  jobListFailure,
   jobListMeta,
   jobListPrompt,
   jobPreviewUrl,
@@ -192,6 +193,11 @@ export function TaskList({
                     <span className="font-mono text-[11px] tabular-nums text-muted-foreground">
                       {jobListMeta(job).join(" · ")}
                     </span>
+                    {jobListFailure(job) ? (
+                      <span className="line-clamp-2 font-mono text-[11px] leading-relaxed text-destructive">
+                        {jobListFailure(job)}
+                      </span>
+                    ) : null}
                   </span>
                 </button>
                 {selecting ? null : (

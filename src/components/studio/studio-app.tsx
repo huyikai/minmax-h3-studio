@@ -905,9 +905,13 @@ export function StudioApp() {
       textareaRef={textareaRef}
       monitorRef={monitorRef}
       disabled={shell === "short" ? shortReadOnly : guideBusy}
+      extraTitle={shell === "long" ? "长视频工作机制" : undefined}
       extraRules={
         shell === "long"
-          ? ["下一段先用大约 2 秒接住上一镜的结尾，再开新动作（气闸）。"]
+          ? [
+              "每段独立排入队列，前一段成功后才会生成下一段。可以连续提交，不必等待上一段完成。重写第 N 段会清掉 N 之后的段，并将重写段重新排到队尾。",
+              "下一段先用大约 2 秒接住上一镜的结尾，再开新动作（气闸）。",
+            ]
           : undefined
       }
       onPinnedChange={(next) => {

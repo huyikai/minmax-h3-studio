@@ -37,6 +37,7 @@ type PromptGuideProps = {
   disabled?: boolean
   compact?: boolean
   docked?: boolean
+  extraTitle?: string
   extraRules?: string[]
   monitorRef?: React.RefObject<HTMLElement | null>
   onPinnedChange: (pinned: boolean) => void
@@ -54,6 +55,7 @@ export function PromptGuide({
   disabled,
   compact = false,
   docked = false,
+  extraTitle,
   extraRules,
   monitorRef,
   onPinnedChange,
@@ -146,6 +148,7 @@ export function PromptGuide({
       compact={compact && desktop}
       pinned={pinned}
       disabled={disabled}
+      extraTitle={extraTitle}
       extraRules={extraRules}
       onPinnedChange={onPinnedChange}
       onInsert={insert}
@@ -247,6 +250,7 @@ function GuideBody({
   compact,
   pinned,
   disabled,
+  extraTitle,
   extraRules,
   onPinnedChange,
   onInsert,
@@ -257,13 +261,15 @@ function GuideBody({
   compact: boolean
   pinned: boolean
   disabled?: boolean
+  extraTitle?: string
   extraRules?: string[]
   onPinnedChange: (pinned: boolean) => void
   onInsert: (id: GuideSectionId) => void
   onCopy: () => void
 }) {
   const sections = guideSections(mode)
-  const rules = [...guideRules(mode), ...(extraRules ?? [])]
+  const baseRules = guideRules(mode)
+  const rules = extraRules ?? []
 
   return (
     <div className="flex h-full min-h-0 flex-col">
@@ -317,8 +323,18 @@ function GuideBody({
             <p className="text-[11px] leading-relaxed text-muted-foreground text-pretty">
               点英文骨架写入输入框。已经有的字段会选中，不会再插一份。灰色中文不会写进去。
             </p>
+            {extraTitle ? (
+              <div className="rounded-md border border-primary/25 bg-primary/5 p-2.5">
+                <p className="text-xs font-medium text-foreground">{extraTitle}</p>
+                <ul className="mt-1.5 list-disc space-y-1.5 pl-4 text-xs leading-relaxed text-muted-foreground">
+                  {rules.map((rule) => (
+                    <li key={rule}>{rule}</li>
+                  ))}
+                </ul>
+              </div>
+            ) : null}
             <ul className="list-disc space-y-1.5 pl-4 text-xs leading-relaxed text-muted-foreground">
-              {rules.map((rule) => (
+              {baseRules.map((rule) => (
                 <li key={rule}>{rule}</li>
               ))}
             </ul>
