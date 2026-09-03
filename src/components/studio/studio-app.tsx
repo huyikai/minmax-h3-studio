@@ -133,6 +133,7 @@ export function StudioApp() {
   const [guidePinned, setGuidePinned] = useState(false)
   const [monitorMode, setMonitorMode] = useState<MonitorMode>("current")
   const [pastSegmentIndex, setPastSegmentIndex] = useState<number | null>(null)
+  const [focusSegmentIndex, setFocusSegmentIndex] = useState<number | null>(null)
   const lastSuccessIndexRef = useRef<number | undefined>(undefined)
   const pastJobIdRef = useRef<string | null>(null)
   const [booting, setBooting] = useState(true)
@@ -155,7 +156,6 @@ export function StudioApp() {
   const monitorRef = useRef<HTMLElement | null>(null)
 
   const connected = Boolean(health?.ok)
-  const busy = Boolean(current && isBusyJob(current))
   const environmentLine: EnvironmentLine =
     shell === "long" ? "long" : workflowEnvironmentLine(workflowName)
 
@@ -407,6 +407,7 @@ export function StudioApp() {
     }
     if (lastIndex == null) {
       lastSuccessIndexRef.current = undefined
+      // eslint-disable-next-line react-hooks/set-state-in-effect -- clear a preview that no longer exists.
       setPastSegmentIndex(null)
       return
     }
@@ -429,6 +430,7 @@ export function StudioApp() {
       : current
     if (!job || !isLongJob(job)) return
     if (successfulSegments(job.long).length < 2 && monitorMode === "stitched") {
+      // eslint-disable-next-line react-hooks/set-state-in-effect -- stitched view is invalid without two completed segments.
       setMonitorMode("current")
     }
   }, [workspaceJobId, jobs, current, monitorMode])
@@ -481,6 +483,7 @@ export function StudioApp() {
     setWorkspaceJobId(null)
     setMonitorMode("current")
     setPastSegmentIndex(null)
+    setFocusSegmentIndex(null)
     lastSuccessIndexRef.current = undefined
     pastJobIdRef.current = null
   }
@@ -491,6 +494,7 @@ export function StudioApp() {
     setCurrent(job)
     setMonitorMode("current")
     setPastSegmentIndex(lastSuccessfulSegment(job?.long)?.index ?? null)
+    setFocusSegmentIndex(null)
     lastSuccessIndexRef.current = lastSuccessfulSegment(job?.long)?.index
     pastJobIdRef.current = job?.id ?? null
     setGuideOpen(false)
@@ -1127,11 +1131,13 @@ export function StudioApp() {
               <div className="flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden rounded-xl border bg-card">
                 {shell === "long" && liveJob && isLongJob(liveJob) ? (
                   <LongWorkspace
+                    key={liveJob.id}
                     job={liveJob}
                     submitting={submitting}
                     prompt={prompt}
                     textareaRef={textareaRef}
                     pastSegmentIndex={pastSegmentIndex}
+                    focusSegmentIndex={focusSegmentIndex}
                     onViewSegment={(index) => {
                       setPastSegmentIndex(index)
                       setMonitorMode("current")
@@ -1238,6 +1244,18 @@ export function StudioApp() {
               onPastSegmentIndexChange={(index) => {
                 setPastSegmentIndex(index)
                 setMonitorMode("current")
+              }}
+              onSelectSegment={(index) => {
+                setFocusSegmentIndex(index)
+                setMonitorMode("current")
+                if (shell === "long") {
+                  window.requestAnimationFrame(() => {
+                    document.getElementById("long-segment-list")?.scrollIntoView({
+                      block: "nearest",
+                      behavior: "smooth",
+                    })
+                  })
+                }
               }}
               onInterrupt={
                 liveJob && isBusyJob(liveJob)

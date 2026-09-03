@@ -15,8 +15,13 @@ import {
 } from "@/lib/job-timing"
 import {
   activeLongSegment,
+  canDispatchLongSegment,
+  chainBreakSegment,
+  impactedLongSegments,
   lastSuccessfulSegment,
+  queuedLongSegments,
   retryableSegment,
+  runningLongSegment,
   successfulSegments,
 } from "@/lib/long-video"
 import type { PublicJob } from "@/lib/types"
@@ -53,7 +58,6 @@ function useTickingNow(enabled: boolean) {
   const [now, setNow] = useState(() => Date.now())
   useEffect(() => {
     if (!enabled) return
-    setNow(Date.now())
     const timer = window.setInterval(() => setNow(Date.now()), 1000)
     return () => window.clearInterval(timer)
   }, [enabled])
@@ -130,6 +134,66 @@ function ProgressBody({
   )
 }
 
+function LongQueueSummary({
+  job,
+  onSelectSegment,
+}: {
+  job: PublicJob
+  onSelectSegment?: (index: number) => void
+}) {
+  const running = runningLongSegment(job.long)
+  const broken = chainBreakSegment(job.long)
+  const queued = queuedLongSegments(job.long)
+  const impacted = impactedLongSegments(job.long)
+  const queueLabel = queued
+    .slice(0, 4)
+    .map((segment) => {
+      const status = segment.status === "queued"
+        ? "排队中"
+        : canDispatchLongSegment(job.long, segment.index)
+          ? "排队中"
+          : "等待前段"
+      return `${segment.index}段 ${status}`
+    })
+  const more = Math.max(0, queued.length - queueLabel.length)
+
+  function segmentButton(index: number, label: string) {
+    if (!onSelectSegment) return <span key={index}>{label}</span>
+    return (
+      <button
+        key={index}
+        type="button"
+        className="rounded px-1 underline-offset-2 hover:bg-muted hover:underline"
+        onClick={() => onSelectSegment(index)}
+      >
+        {label}
+      </button>
+    )
+  }
+
+  return (
+    <div className="flex flex-col gap-1 border-t px-4 py-2.5 text-xs" aria-live="polite">
+      {running ? (
+        <p className="font-medium text-primary">当前生成：第 {running.index} 段</p>
+      ) : broken ? (
+        <p className="font-medium text-destructive">
+          当前无生成 · 第 {broken.index} 段{broken.status === "error" ? "失败" : "已中断"}
+          {impacted.length > 0 ? ` · 后续 ${impacted.length} 段等待前段` : ""}
+        </p>
+      ) : queued.length > 0 ? (
+        <p className="font-medium text-muted-foreground">当前无生成 · 等待第 {queued[0].index} 段处理</p>
+      ) : null}
+      {queued.length > 0 ? (
+        <p className="flex flex-wrap items-center gap-1 text-muted-foreground">
+          <span>队列中：</span>
+          {queueLabel.map((label, index) => segmentButton(queued[index].index, label))}
+          {more > 0 ? <span>还有 {more} 段</span> : null}
+        </p>
+      ) : null}
+    </div>
+  )
+}
+
 function FailureBody({
   job,
   now,
@@ -163,6 +227,7 @@ export function MonitorPanel({
   onModeChange,
   pastSegmentIndex,
   onPastSegmentIndexChange,
+  onSelectSegment,
   onInterrupt,
   onRetryStitch,
   emptyHint,
@@ -175,6 +240,7 @@ export function MonitorPanel({
   onModeChange: (mode: MonitorMode) => void
   pastSegmentIndex?: number | null
   onPastSegmentIndexChange?: (index: number) => void
+  onSelectSegment?: (index: number) => void
   onInterrupt?: () => void
   onRetryStitch?: () => void
   emptyHint: string
@@ -293,6 +359,7 @@ export function MonitorPanel({
           )}
         </div>
       ) : null}
+      {long && job ? <LongQueueSummary job={job} onSelectSegment={onSelectSegment} /> : null}
       {!showStitched && successes.length > 1 ? (
         <div className="flex overflow-x-auto border-b px-4 py-2">
           <ToggleGroup

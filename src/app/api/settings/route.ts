@@ -7,7 +7,9 @@ export const dynamic = "force-dynamic"
 export async function GET() {
   const settings = await readSettings()
   const { http } = await comfyBaseUrl()
-  const { hfToken: _token, ...safe } = settings
+  const safe = Object.fromEntries(
+    Object.entries(settings).filter(([key]) => key !== "hfToken")
+  )
   return Response.json({
     ...safe,
     comfyUrl: http,
@@ -42,6 +44,8 @@ export async function PUT(request: Request) {
         : body.h3UnetPrecision,
     hfToken: body.hfToken === undefined ? current.hfToken : String(body.hfToken),
   })
-  const { hfToken: _token, ...safe } = next
+  const safe = Object.fromEntries(
+    Object.entries(next).filter(([key]) => key !== "hfToken")
+  )
   return Response.json({ ...safe, hfTokenSet: Boolean(next.hfToken) })
 }

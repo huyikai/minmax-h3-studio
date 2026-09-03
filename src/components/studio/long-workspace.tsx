@@ -1,7 +1,19 @@
 "use client"
 
-import { useEffect, useMemo, useState } from "react"
-import { PlayIcon } from "lucide-react"
+import { useEffect, useMemo, useRef, useState } from "react"
+import {
+  AlertCircleIcon,
+  ArchiveIcon,
+  CheckCircle2Icon,
+  ChevronDownIcon,
+  Clock3Icon,
+  ListFilterIcon,
+  LoaderCircleIcon,
+  PlayIcon,
+  RotateCcwIcon,
+  UnlinkIcon,
+} from "lucide-react"
+import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
 import {
   AlertDialog,
@@ -26,16 +38,20 @@ import { ToggleGroup, ToggleGroupItem } from "@/components/ui/toggle-group"
 import { LabelWithHelp } from "@/components/studio/field-help"
 import { ASPECT_PRESETS, DURATION_OPTIONS, LONG_STEP_OPTIONS } from "@/lib/types"
 import { ResolutionPicker } from "@/components/studio/resolution-picker"
-import type { PublicJob } from "@/lib/types"
+import type { LongSegment, PublicJob } from "@/lib/types"
 import { isBusyJob } from "@/lib/job-view"
 import {
   canDispatchLongSegment,
+  expectedLongSegmentIndex,
   hasUnfinishedSegments,
   lastSuccessfulSegment,
   laterSegments,
+  liveSegments,
   mergeLockIntoPrompt,
   nextClipIndex,
+  queuedLongSegments,
   retryableSegment,
+  runningLongSegment,
   successfulSegments,
 } from "@/lib/long-video"
 import { cn } from "@/lib/utils"
@@ -44,25 +60,110 @@ function randomSeed() {
   return Math.floor(Math.random() * 1_000_000_000)
 }
 
-function segmentStatusLabel(status: string) {
-  switch (status) {
-    case "waiting":
-      return "等待"
-    case "queued":
-      return "排队中"
-    case "running":
-      return "生成中"
-    case "success":
-      return "完成"
-    case "error":
-      return "失败"
-    case "interrupted":
-      return "已中断"
-    case "voided":
-      return "已作废"
-    default:
-      return status
+type SegmentFilter = "all" | "pending" | "running" | "success" | "failed" | "voided"
+
+type SegmentStatusBadgeProps = {
+  status: string
+  blocked?: boolean
+}
+
+function SegmentStatusBadge({ status, blocked }: SegmentStatusBadgeProps) {
+  const config =
+    blocked && status === "waiting"
+      ? {
+          label: "等待前段",
+          icon: UnlinkIcon,
+          className: "border-amber-500/30 bg-amber-500/10 text-amber-700 dark:text-amber-300",
+        }
+      : status === "waiting"
+        ? {
+            label: "待处理",
+            icon: Clock3Icon,
+            className: "border-slate-400/30 bg-slate-500/10 text-slate-700 dark:text-slate-300",
+          }
+        : status === "queued"
+          ? {
+              label: "排队中",
+              icon: ListFilterIcon,
+              className: "border-sky-500/30 bg-sky-500/10 text-sky-700 dark:text-sky-300",
+            }
+          : status === "running"
+            ? {
+                label: "生成中",
+                icon: LoaderCircleIcon,
+                className: "border-primary/30 bg-primary/10 text-primary",
+              }
+            : status === "success"
+              ? {
+                  label: "完成",
+                  icon: CheckCircle2Icon,
+                  className: "border-emerald-500/30 bg-emerald-500/10 text-emerald-700 dark:text-emerald-300",
+                }
+              : status === "error"
+                ? {
+                    label: "失败",
+                    icon: AlertCircleIcon,
+                    className: "border-destructive/30 bg-destructive/10 text-destructive",
+                  }
+                : status === "interrupted"
+                  ? {
+                      label: "已中断",
+                      icon: RotateCcwIcon,
+                      className: "border-orange-500/30 bg-orange-500/10 text-orange-700 dark:text-orange-300",
+                    }
+                  : {
+                      label: "已作废",
+                      icon: ChevronDownIcon,
+                      className: "border-muted-foreground/30 bg-muted text-muted-foreground",
+                    }
+  const Icon = config.icon
+
+  return (
+    <Badge variant="outline" className={cn("h-6 gap-1 rounded-md px-2", config.className)}>
+      <Icon className={cn("size-3.5", status === "running" && "animate-spin")} />
+      {config.label}
+    </Badge>
+  )
+}
+
+function formatSegmentIndexes(indexes: number[]) {
+  const sorted = [...indexes].sort((a, b) => a - b)
+  const ranges: string[] = []
+  let start = sorted[0]
+  let end = sorted[0]
+  for (const index of sorted.slice(1)) {
+    if (index === end + 1) {
+      end = index
+      continue
+    }
+    ranges.push(start === end ? `第 ${start} 段` : `第 ${start}-${end} 段`)
+    start = index
+    end = index
   }
+  if (start !== undefined) {
+    ranges.push(start === end ? `第 ${start} 段` : `第 ${start}-${end} 段`)
+  }
+  return ranges.join("、")
+}
+
+function segmentStatusCounts(segments: LongSegment[]) {
+  const counts = new Map<string, number>()
+  for (const segment of segments) {
+    counts.set(segment.status, (counts.get(segment.status) ?? 0) + 1)
+  }
+  return [
+    ["success", "已完成"],
+    ["queued", "排队中"],
+    ["waiting", "等待前段"],
+    ["running", "生成中"],
+    ["error", "失败"],
+    ["interrupted", "已中断"],
+  ]
+    .flatMap(([status, label]) => {
+      const count = counts.get(status) ?? 0
+      return count > 0 ? [`${label} ${count} 段`] : []
+    })
+    .join("，")
 }
 
 function SegmentSummary({
@@ -72,6 +173,9 @@ function SegmentSummary({
   status,
   prompt,
   blocked,
+  expanded,
+  onTogglePrompt,
+  onViewSegment,
 }: {
   index: number
   duration: number
@@ -79,19 +183,43 @@ function SegmentSummary({
   status: string
   prompt: string
   blocked?: boolean
+  expanded: boolean
+  onTogglePrompt: () => void
+  onViewSegment?: () => void
 }) {
   return (
-    <>
-      <span className="font-mono text-[11px] tabular-nums text-muted-foreground">
-        第 {index} 段 · {duration}s · seed {seed}
-      </span>
-      <span className="mt-0.5 block text-xs">
-        {blocked && status === "waiting" ? "等待前段" : segmentStatusLabel(status)}
-      </span>
-      <span className="mt-1 line-clamp-2 text-xs text-muted-foreground">
+    <div className="min-w-0">
+      <div className="flex flex-wrap items-center gap-2">
+        {onViewSegment ? (
+          <button
+            type="button"
+            className="font-mono text-[11px] tabular-nums text-muted-foreground underline-offset-2 hover:text-foreground hover:underline"
+            onClick={onViewSegment}
+          >
+            第 {index} 段 · {duration}s · seed {seed}
+          </button>
+        ) : (
+          <span className="font-mono text-[11px] tabular-nums text-muted-foreground">
+            第 {index} 段 · {duration}s · seed {seed}
+          </span>
+        )}
+        <SegmentStatusBadge status={status} blocked={blocked} />
+      </div>
+      <button
+        type="button"
+        className={cn(
+          "mt-1 block w-full text-left text-xs text-muted-foreground hover:text-foreground",
+          expanded ? "whitespace-pre-wrap" : "line-clamp-2"
+        )}
+        onClick={onTogglePrompt}
+        aria-label={expanded ? `收起第 ${index} 段提示词` : `展开第 ${index} 段提示词`}
+      >
         {prompt || "（无提示词）"}
+      </button>
+      <span className="mt-1 block text-[10px] text-muted-foreground/70">
+        {expanded ? "点击收起提示词" : "点击展开提示词"}
       </span>
-    </>
+    </div>
   )
 }
 
@@ -112,6 +240,7 @@ export function LongWorkspace({
   prompt,
   textareaRef,
   pastSegmentIndex,
+  focusSegmentIndex,
   onViewSegment,
   onPromptChange,
   onPromptFocus,
@@ -124,6 +253,7 @@ export function LongWorkspace({
   prompt: string
   textareaRef: React.RefObject<HTMLTextAreaElement | null>
   pastSegmentIndex?: number | null
+  focusSegmentIndex?: number | null
   onViewSegment?: (index: number) => void
   onPromptChange: (value: string | ((prev: string) => string)) => void
   onPromptFocus?: () => void
@@ -150,47 +280,144 @@ export function LongWorkspace({
   const [redoIndex, setRedoIndex] = useState<number | null>(null)
   const [redoConfirmIndex, setRedoConfirmIndex] = useState<number | null>(null)
   const [redoSubmitOpen, setRedoSubmitOpen] = useState(false)
+  const [segmentFilter, setSegmentFilter] = useState<SegmentFilter>("all")
+  const [expandedSegments, setExpandedSegments] = useState<Set<number>>(new Set())
+  const [voidedOpen, setVoidedOpen] = useState(false)
+  const segmentRefs = useRef<Record<number, HTMLLIElement | null>>({})
+  const segmentListRef = useRef<HTMLDivElement | null>(null)
+  const editorScrollRef = useRef<HTMLDivElement | null>(null)
+  const filterScrollPositions = useRef<Partial<Record<SegmentFilter, number>>>({})
+  const lastAutoScrollTarget = useRef<string | null>(null)
+  const previousFilter = useRef<SegmentFilter>("all")
+
+  const segments = liveSegments(long)
+  const voidedSegments = (long?.segments ?? [])
+    .filter((item) => item.status === "voided")
+    .sort((a, b) => a.index - b.index)
+  const runningSegment = runningLongSegment(long)
+  const queuedSegments = queuedLongSegments(long)
+  const expectedIndex = expectedLongSegmentIndex(long)
+  const displayFilter =
+    focusSegmentIndex != null &&
+    segmentFilter !== "all" &&
+    (segmentFilter === "voided"
+      ? !voidedSegments.some((segment) => segment.index === focusSegmentIndex)
+      : !segments.some((segment) => segment.index === focusSegmentIndex))
+      ? "all"
+      : segmentFilter
+  const filterSegments = useMemo(() => {
+    if (displayFilter === "voided") return voidedSegments
+    return segments.filter((segment) => {
+      if (displayFilter === "all") return true
+      if (displayFilter === "pending") {
+        return segment.status === "waiting" || segment.status === "queued"
+      }
+      if (displayFilter === "running") return segment.status === "running"
+      if (displayFilter === "success") return segment.status === "success"
+      return segment.status === "error" || segment.status === "interrupted"
+    })
+  }, [displayFilter, segments, voidedSegments])
+  const pendingCount = queuedSegments.length
+  const currentStatusTarget =
+    runningSegment?.index ?? focusSegmentIndex ?? retry?.index ?? redoConfirmIndex
+  const hiddenCurrent =
+    currentStatusTarget !== null &&
+    currentStatusTarget !== undefined &&
+    !filterSegments.some((segment) => segment.index === currentStatusTarget)
 
   useEffect(() => {
-    setLockPrompt(job.long?.lockPrompt ?? "")
-    setAspect(job.aspect)
-    setMegapixels(job.megapixels ?? 0.98)
-    setSteps(String(job.steps ?? 20))
-  }, [job.id, job.long?.lockPrompt, job.aspect, job.megapixels, job.steps])
+    if (currentStatusTarget == null || hiddenCurrent) return
+    const target = `${currentStatusTarget}:${displayFilter}:${filterSegments.length}`
+    if (lastAutoScrollTarget.current === target) return
+    const node = segmentRefs.current[currentStatusTarget]
+    if (!node) return
+    lastAutoScrollTarget.current = target
+    node.scrollIntoView({ block: "nearest", behavior: "smooth" })
+  }, [currentStatusTarget, displayFilter, filterSegments, hiddenCurrent])
+
+  useEffect(() => {
+    const previous = previousFilter.current
+    if (previous === segmentFilter) return
+    const editor = editorScrollRef.current
+    if (editor) filterScrollPositions.current[previous] = editor.scrollTop
+    previousFilter.current = segmentFilter
+    const saved = filterScrollPositions.current[segmentFilter]
+    if (saved === undefined || !editor) return
+    window.requestAnimationFrame(() => {
+      editor.scrollTop = saved
+    })
+  }, [segmentFilter])
+
+  function handleFilterChange(next: SegmentFilter) {
+    const editor = editorScrollRef.current
+    if (editor) filterScrollPositions.current[segmentFilter] = editor.scrollTop
+    setSegmentFilter(next)
+  }
 
   useEffect(() => {
     onPromptChange("")
-    setDuration("5")
-    setRandomize(true)
-    setSeed(randomSeed())
-    setRedoIndex(null)
   }, [job.id, onPromptChange])
 
+  const retryIndex = retry?.index
+  const retryStatus = retry?.status
+  const retryPrompt = retry?.prompt
+  const retryDuration = retry?.duration
+  const retrySeed = retry?.seed
   useEffect(() => {
-    if (!retry) return
+    if (
+      retryIndex == null ||
+      retryPrompt == null ||
+      retryDuration == null ||
+      retrySeed == null
+    ) {
+      return
+    }
+    // eslint-disable-next-line react-hooks/set-state-in-effect -- server status changes must hydrate the retry editor once.
     setRedoIndex(null)
-    onPromptChange(retry.prompt)
-    setDuration(String(retry.duration))
-    setSeed(retry.seed)
+    onPromptChange(retryPrompt)
+    setDuration(String(retryDuration))
+    setSeed(retrySeed)
     setRandomize(false)
-  }, [job.id, retry?.index, retry?.status, retry?.prompt, onPromptChange])
+  }, [
+    job.id,
+    onPromptChange,
+    retryDuration,
+    retryIndex,
+    retryPrompt,
+    retrySeed,
+    retryStatus,
+  ])
 
   const lastSuccess = lastSuccessfulSegment(long)
+  const completedPrompt = lastSuccess?.prompt
+  const hasWaitingSegments = liveSegments(long).some(
+    (item) => item.status === "waiting"
+  )
   useEffect(() => {
-    if (!lastSuccess || retry || busy || finalized) return
-    if ((long?.segments ?? []).some((item) => item.status === "waiting")) return
-    const completedPrompt = lastSuccess.prompt
+    if (
+      !completedPrompt ||
+      retryIndex != null ||
+      busy ||
+      finalized ||
+      hasWaitingSegments
+    ) {
+      return
+    }
     onPromptChange((prev) =>
       prev.trim() === completedPrompt.trim() ? "" : prev
     )
-  }, [lastSuccess?.index, lastSuccess?.status, lastSuccess?.prompt, retry?.index, busy, finalized, onPromptChange])
+  }, [
+    busy,
+    completedPrompt,
+    finalized,
+    hasWaitingSegments,
+    onPromptChange,
+    retryIndex,
+  ])
 
-  const redoConfirmTail = (long?.segments ?? []).filter(
-    (item) =>
-      redoConfirmIndex !== null &&
-      item.index > redoConfirmIndex &&
-      item.status !== "voided"
-  ).length
+  const redoConfirmSegments =
+    redoConfirmIndex === null ? [] : laterSegments(long, redoConfirmIndex)
+  const redoConfirmTail = redoConfirmSegments.length
 
   function beginRedo(index: number) {
     const segment = (long?.segments ?? []).find((item) => item.index === index)
@@ -235,8 +462,8 @@ export function LongWorkspace({
 
   return (
     <div className="flex min-h-0 flex-1 flex-col">
-      <div className="min-h-0 flex-1 overflow-y-auto px-4 py-4">
-        <FieldGroup>
+      <div ref={editorScrollRef} className="min-h-0 flex-1 overflow-y-auto px-4">
+        <FieldGroup className="py-4">
           <Field>
             <LabelWithHelp htmlFor="long-lock" label="公共锁定">
               只拼到每一段 integrated_multimodal_description 的开头。环境音和配乐仍按段写。可空。
@@ -252,71 +479,169 @@ export function LongWorkspace({
           </Field>
 
           <Field>
-            <LabelWithHelp label="已生成的段">
-              点已完成的段可在监视器过往段回看。重写某一段会丢掉它后面的输入、队列和成片。
-            </LabelWithHelp>
-            <ul className="flex flex-col gap-1.5">
-              {(long?.segments ?? []).length === 0 ? (
-                <li className="rounded-md border border-dashed px-3 py-2 text-xs text-muted-foreground">
-                  还没有段。下面写第 1 段。
-                </li>
-              ) : (
-                (long?.segments ?? []).map((segment) => {
-                  const blocked =
-                    segment.status === "waiting" &&
-                    !canDispatchLongSegment(long, segment.index)
-                  return (
-                  <li
-                    key={segment.index}
-                    className={cn(
-                      "flex items-start justify-between gap-2 rounded-md border px-3 py-2",
-                      segment.status === "voided" && "opacity-50",
-                      segment.status === "success" &&
-                        pastSegmentIndex === segment.index &&
-                        "border-primary/70 bg-primary/10"
-                    )}
+            <div
+              id="long-segment-list"
+              ref={segmentListRef}
+              className="flex flex-col gap-3"
+            >
+              <div className="sticky top-0 z-10 -mx-1 flex flex-col gap-2 border-b bg-card px-1 py-2 shadow-sm">
+                <div>
+                  <LabelWithHelp label="段落列表">
+                    已完成、排队中和等待前段的内容都会显示。重写某一段会丢掉它后面的输入、队列和成片。
+                  </LabelWithHelp>
+                  <div className="mt-2 flex flex-wrap gap-x-3 gap-y-1 font-mono text-[11px] tabular-nums text-muted-foreground">
+                    <span>当前生成：{runningSegment ? `第 ${runningSegment.index} 段` : "无"}</span>
+                    <span>排队：{pendingCount} 段</span>
+                    <span>预计到：第 {expectedIndex || 1} 段</span>
+                  </div>
+                </div>
+                {hiddenCurrent ? (
+                  <Button
+                    type="button"
+                    size="sm"
+                    variant="outline"
+                    onClick={() => handleFilterChange("all")}
                   >
-                    {segment.status === "success" && onViewSegment ? (
-                      <button
-                        type="button"
-                        className="min-w-0 flex-1 text-left"
-                        onClick={() => onViewSegment(segment.index)}
-                      >
-                        <SegmentSummary
-                          index={segment.index}
-                          duration={segment.duration}
-                          seed={segment.seed}
-                          status={segment.status}
-                          prompt={segment.prompt}
-                        />
-                      </button>
-                    ) : (
-                      <span className="min-w-0">
-                        <SegmentSummary
-                          index={segment.index}
-                          duration={segment.duration}
-                          seed={segment.seed}
-                          status={segment.status}
-                          prompt={segment.prompt}
-                          blocked={blocked}
-                        />
-                      </span>
-                    )}
-                    {segment.status !== "voided" && !finalized ? (
-                      <Button
-                        type="button"
-                        size="sm"
-                        variant="ghost"
-                        onClick={() => setRedoConfirmIndex(segment.index)}
-                      >
-                        重写
-                      </Button>
-                    ) : null}
+                    显示当前段
+                  </Button>
+                ) : null}
+              </div>
+              <div className="-mx-1 flex max-w-full overflow-x-auto px-1 pb-1">
+                <div className="flex min-w-max gap-1" role="tablist" aria-label="段落状态筛选">
+                  {([
+                    ["all", "全部", segments.length],
+                    ["pending", "待处理", segments.filter((item) => item.status === "waiting" || item.status === "queued").length],
+                    ["running", "生成中", segments.filter((item) => item.status === "running").length],
+                    ["success", "已完成", segments.filter((item) => item.status === "success").length],
+                    ["failed", "失败 / 中断", segments.filter((item) => item.status === "error" || item.status === "interrupted").length],
+                    ["voided", "已作废", voidedSegments.length],
+                  ] as const).map(([value, label, count]) => (
+                    <Button
+                      key={value}
+                      type="button"
+                      size="sm"
+                      variant={displayFilter === value ? "secondary" : "ghost"}
+                      role="tab"
+                      aria-selected={displayFilter === value}
+                      onClick={() => handleFilterChange(value)}
+                    >
+                      {label} <span className="font-mono text-[10px] tabular-nums">{count}</span>
+                    </Button>
+                  ))}
+                </div>
+              </div>
+              <ul className="flex flex-col gap-1.5">
+                {filterSegments.length === 0 ? (
+                  <li className="rounded-md border border-dashed px-3 py-2 text-xs text-muted-foreground">
+                    {segments.length === 0 ? "还没有段。下面写第 1 段。" : "当前筛选没有段落。"}
                   </li>
-                  )
-                })
-              )}
-            </ul>
+                ) : (
+                  filterSegments.map((segment) => {
+                    const blocked =
+                      segment.status === "waiting" &&
+                      !canDispatchLongSegment(long, segment.index)
+                    const expanded = expandedSegments.has(segment.index)
+                    return (
+                      <li
+                        key={segment.index}
+                        ref={(node) => {
+                          segmentRefs.current[segment.index] = node
+                        }}
+                        className={cn(
+                          "flex items-start justify-between gap-2 rounded-md border border-l-4 px-3 py-2",
+                          segment.status === "waiting" &&
+                            blocked && "border-l-amber-500 bg-amber-500/5",
+                          segment.status === "waiting" &&
+                            !blocked && "border-l-slate-400 bg-slate-500/5",
+                          segment.status === "queued" && "border-l-sky-500 bg-sky-500/5",
+                          segment.status === "running" && "border-l-primary bg-primary/10",
+                          segment.status === "success" && "border-l-emerald-500 bg-emerald-500/5",
+                          (segment.status === "error" || segment.status === "interrupted") &&
+                            "border-l-destructive bg-destructive/5",
+                          segment.status === "voided" && "border-l-muted-foreground opacity-60",
+                          segment.status === "success" &&
+                            pastSegmentIndex === segment.index &&
+                            "border-primary/70 bg-primary/10"
+                        )}
+                      >
+                        <div className="min-w-0 flex-1">
+                          <SegmentSummary
+                            index={segment.index}
+                            duration={segment.duration}
+                            seed={segment.seed}
+                            status={segment.status}
+                            prompt={segment.prompt}
+                            blocked={blocked}
+                            expanded={expanded}
+                            onViewSegment={
+                              segment.status === "success" && onViewSegment
+                                ? () => onViewSegment(segment.index)
+                                : undefined
+                            }
+                            onTogglePrompt={() => {
+                              setExpandedSegments((current) => {
+                                const next = new Set(current)
+                                if (next.has(segment.index)) next.delete(segment.index)
+                                else next.add(segment.index)
+                                return next
+                              })
+                            }}
+                          />
+                        </div>
+                        {segment.status !== "voided" && !finalized ? (
+                          <Button
+                            type="button"
+                            size="sm"
+                            variant="ghost"
+                            className="shrink-0"
+                            onClick={() => setRedoConfirmIndex(segment.index)}
+                          >
+                            重写
+                          </Button>
+                        ) : null}
+                      </li>
+                    )
+                  })
+                )}
+              </ul>
+              {voidedSegments.length > 0 && segmentFilter !== "voided" ? (
+                <div className="rounded-md border border-dashed">
+                  <button
+                    type="button"
+                    className="flex w-full items-center justify-between px-3 py-2 text-left text-xs text-muted-foreground"
+                    onClick={() => setVoidedOpen((open) => !open)}
+                    aria-expanded={voidedOpen}
+                  >
+                    <span className="flex items-center gap-2"><ArchiveIcon className="size-3.5" />已作废 {voidedSegments.length} 段</span>
+                    <ChevronDownIcon className={cn("size-4 transition-transform", voidedOpen && "rotate-180")} />
+                  </button>
+                  {voidedOpen ? (
+                    <ul className="flex flex-col gap-1 border-t p-2">
+                      {voidedSegments.map((segment) => (
+                        <li key={segment.index} className="rounded-md bg-muted/50 px-2.5 py-2">
+                          <SegmentSummary
+                            index={segment.index}
+                            duration={segment.duration}
+                            seed={segment.seed}
+                            status={segment.status}
+                            prompt={segment.prompt}
+                            expanded={expandedSegments.has(segment.index)}
+                            onTogglePrompt={() => {
+                              setExpandedSegments((current) => {
+                                const next = new Set(current)
+                                if (next.has(segment.index)) next.delete(segment.index)
+                                else next.add(segment.index)
+                                return next
+                              })
+                            }}
+                          />
+                        </li>
+                      ))}
+                    </ul>
+                  ) : null}
+                </div>
+              ) : null}
+            </div>
           </Field>
 
           <Field>
@@ -556,9 +881,18 @@ export function LongWorkspace({
               {redoConfirmIndex ? `重写第 ${redoConfirmIndex} 段？` : "重写这一段？"}
             </AlertDialogTitle>
             <AlertDialogDescription>
-              {redoConfirmTail > 0
-                ? `会丢掉后面 ${redoConfirmTail} 段（含队列里未开始的和已成功的）。潜变量文件可能还在，但不能接着用。点确定后仍可改提示词，再提交会排到队尾。`
-                : `将用新生成替换第 ${redoConfirmIndex ?? ""} 段。点确定后仍可改提示词，再点生成才会提交。`}
+              {redoConfirmTail > 0 ? (
+                <span className="flex flex-col gap-2">
+                  <span>
+                    将清掉 {formatSegmentIndexes(redoConfirmSegments.map((segment) => segment.index))}，共 {redoConfirmTail} 段。
+                  </span>
+                  <span className="text-xs text-muted-foreground">
+                    {segmentStatusCounts(redoConfirmSegments)}。潜变量不能接着用，确定后重新提交会排到队尾。
+                  </span>
+                </span>
+              ) : (
+                `将用新生成替换第 ${redoConfirmIndex ?? ""} 段。点确定后仍可改提示词，再点生成才会提交。`
+              )}
             </AlertDialogDescription>
           </AlertDialogHeader>
           <AlertDialogFooter>
@@ -583,7 +917,7 @@ export function LongWorkspace({
             </AlertDialogTitle>
             <AlertDialogDescription>
               {laterCount > 0
-                ? `提交后会丢掉后面 ${laterCount} 段，这一段重新排到队尾。此操作不能从列表里撤销。`
+                ? `提交后会清掉 ${formatSegmentIndexes(laterSegments(long, targetIndex).map((segment) => segment.index))}，共 ${laterCount} 段。这一段重新排到队尾，此操作不能从列表里撤销。`
                 : "提交后会按当前提示词重新生成这一段，替换现有成片，并排到队尾。"}
             </AlertDialogDescription>
           </AlertDialogHeader>

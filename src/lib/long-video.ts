@@ -88,6 +88,25 @@ export function lastWaitingSegment(state: LongVideoState | undefined) {
   return items[items.length - 1]
 }
 
+export function queuedLongSegments(state: LongVideoState | undefined) {
+  return liveSegments(state).filter(
+    (item) => item.status === "waiting" || item.status === "queued"
+  )
+}
+
+export function runningLongSegment(state: LongVideoState | undefined) {
+  return liveSegments(state).find((item) => item.status === "running")
+}
+
+export function expectedLongSegmentIndex(state: LongVideoState | undefined) {
+  return liveSegments(state).reduce((highest, item) => Math.max(highest, item.index), 0)
+}
+
+export function impactedLongSegments(state: LongVideoState | undefined) {
+  const broken = chainBreakSegment(state)
+  return broken ? laterSegments(state, broken.index) : []
+}
+
 export function laterSegments(state: LongVideoState | undefined, index: number) {
   return liveSegments(state).filter((item) => item.index > index)
 }
