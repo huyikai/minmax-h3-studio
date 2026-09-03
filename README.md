@@ -25,7 +25,7 @@ pnpm install
 开发时同时启动主服务和 Mock ComfyUI：
 
 ```bash
-pnpm dev:all
+pnpm dev:mock
 ```
 
 浏览器打开 [http://127.0.0.1:17333](http://127.0.0.1:17333)。按 `Ctrl+C` 会同时停止两个服务。
