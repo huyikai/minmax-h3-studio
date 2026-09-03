@@ -7,7 +7,8 @@
     "build": "next build",
     "start": "next start --hostname 127.0.0.1 --port 17333",
     "lint": "eslint",
-    "mock:comfy": "node scripts/mock-comfyui.mjs"
+    "mock:comfy": "node scripts/mock-comfyui.mjs",
+    "dev:all": "node scripts/dev-all.mjs"
   },
   "dependencies": {
     "class-variance-authority": "^0.7.1",

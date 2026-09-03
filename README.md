@@ -16,12 +16,31 @@ Studio 不会代装 ComfyUI。连上本机 Comfy 之后，可在设置「环境�
 
 ## 启动
 
+安装依赖：
+
 ```bash
 pnpm install
+```
+
+开发时同时启动主服务和 Mock ComfyUI：
+
+```bash
+pnpm dev:all
+```
+
+浏览器打开 [http://127.0.0.1:17333](http://127.0.0.1:17333)。按 `Ctrl+C` 会同时停止两个服务。
+
+如果只启动主服务：
+
+```bash
 pnpm dev
 ```
 
-浏览器打开 [http://127.0.0.1:17333](http://127.0.0.1:17333)。
+如果只启动 Mock ComfyUI：
+
+```bash
+pnpm mock:comfy
+```
 
 生产模式：
 
