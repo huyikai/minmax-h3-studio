@@ -3,21 +3,76 @@ import type { LongVideoWorkflowKind, MediaKind } from "@/lib/types"
 
 export type LongWorkflowCapabilities = {
   kind: LongVideoWorkflowKind
-  motionContext: true
+  motionContext: boolean
   publicReferenceKinds: MediaKind[]
   segmentReferenceKinds: MediaKind[]
   supportsFirstFrame: boolean
   supportsLastFrame: boolean
+  supportsMotionContextWithLastFrame: boolean
+  supportsAudio: boolean
+  supportsVideoReference: boolean
+  supportsImageReference: boolean
+  validated: boolean
+  unavailableReason?: string
 }
 
+export const LONG_T2V_FILE = "h3-t2v-long.json"
+export const LONG_I2V_FILE = "h3-i2v-long.json"
+export const LONG_R2V_FILE = "h3-r2v-long.json"
+export const LONG_FLF_FILE = "h3-flf-long.json"
+
 export const LONG_WORKFLOW_CAPABILITIES: Record<string, LongWorkflowCapabilities> = {
-  "h3-t2v-long.json": {
+  [LONG_T2V_FILE]: {
     kind: "t2v",
     motionContext: true,
     publicReferenceKinds: [],
     segmentReferenceKinds: [],
     supportsFirstFrame: false,
     supportsLastFrame: false,
+    supportsMotionContextWithLastFrame: false,
+    supportsAudio: false,
+    supportsVideoReference: false,
+    supportsImageReference: false,
+    validated: true,
+  },
+  [LONG_I2V_FILE]: {
+    kind: "i2v",
+    motionContext: true,
+    publicReferenceKinds: [],
+    segmentReferenceKinds: [],
+    supportsFirstFrame: true,
+    supportsLastFrame: false,
+    supportsMotionContextWithLastFrame: false,
+    supportsAudio: false,
+    supportsVideoReference: false,
+    supportsImageReference: false,
+    validated: true,
+  },
+  [LONG_R2V_FILE]: {
+    kind: "r2v",
+    motionContext: true,
+    publicReferenceKinds: ["image", "video", "audio"],
+    segmentReferenceKinds: ["image", "video", "audio"],
+    supportsFirstFrame: false,
+    supportsLastFrame: false,
+    supportsMotionContextWithLastFrame: false,
+    supportsAudio: true,
+    supportsVideoReference: true,
+    supportsImageReference: true,
+    validated: true,
+  },
+  [LONG_FLF_FILE]: {
+    kind: "f2v",
+    motionContext: true,
+    publicReferenceKinds: [],
+    segmentReferenceKinds: [],
+    supportsFirstFrame: true,
+    supportsLastFrame: true,
+    supportsMotionContextWithLastFrame: true,
+    supportsAudio: false,
+    supportsVideoReference: false,
+    supportsImageReference: false,
+    validated: true,
   },
 }
 
@@ -45,6 +100,16 @@ export type WorkflowListItem = {
   picker?: boolean
   longCapabilities?: LongWorkflowCapabilities
 }
+
+export const LONG_WORKFLOW_GROUPS: Array<{
+  kind: LongVideoWorkflowKind
+  label: string
+}> = [
+  { kind: "t2v", label: "文生长视频" },
+  { kind: "i2v", label: "图生长视频" },
+  { kind: "r2v", label: "参考生长视频" },
+  { kind: "f2v", label: "首尾帧长视频" },
+]
 
 export const BUNDLED_WORKFLOWS: BundledWorkflow[] = [
   {
@@ -84,10 +149,31 @@ export const BUNDLED_WORKFLOWS: BundledWorkflow[] = [
     family: "reference",
   },
   {
-    file: "h3-t2v-long.json",
+    file: LONG_T2V_FILE,
     label: "长视频 · 文生链",
     description:
       "官方文生 20 步，接上 Motion Context / Load / Save Latent / Trim。新建长视频用这份图。需要 ComfyUI-H3-Motion-Context。",
+    family: "long",
+    picker: false,
+  },
+  {
+    file: LONG_I2V_FILE,
+    label: "长视频 · 图生链",
+    description: "官方图生接上 Motion Context。第 1 段用首帧，后续段用上一镜潜变量衔接。",
+    family: "long",
+    picker: false,
+  },
+  {
+    file: LONG_R2V_FILE,
+    label: "长视频 · 参考生链",
+    description: "官方参考生接上 Motion Context。公共参考锁定后每段自动注入，本段还可另加参考。",
+    family: "long",
+    picker: false,
+  },
+  {
+    file: LONG_FLF_FILE,
+    label: "长视频 · 首尾帧链",
+    description: "官方首尾帧接上 Motion Context。第 1 段用首帧，每段可选尾帧。",
     family: "long",
     picker: false,
   },

@@ -27,6 +27,10 @@ type ReferenceSlotsProps = {
   drafts: RefDraft[]
   onAdd: (kind: MediaKind, files: File[]) => void
   onRemove: (id: string) => void
+  allowedKinds?: MediaKind[]
+  disabled?: boolean
+  label?: string
+  help?: string
 }
 
 const ADD_OPTIONS: Array<{
@@ -52,13 +56,25 @@ export function taggedRefs(drafts: RefDraft[]) {
   })
 }
 
-export function ReferenceSlots({ drafts, onAdd, onRemove }: ReferenceSlotsProps) {
+export function ReferenceSlots({
+  drafts,
+  onAdd,
+  onRemove,
+  allowedKinds,
+  disabled,
+  label = "参考",
+  help,
+}: ReferenceSlotsProps) {
+  const kinds = allowedKinds ?? [...REF_KINDS]
   const tagged = taggedRefs(drafts)
   const used = {
     image: drafts.filter((item) => item.kind === "image").length,
     video: drafts.filter((item) => item.kind === "video").length,
     audio: drafts.filter((item) => item.kind === "audio").length,
   }
+  const helpText =
+    help ??
+    `最多 ${REF_LIMITS.image} 张图、${REF_LIMITS.video} 段视频、${REF_LIMITS.audio} 段音频。提示词用 ${refPromptTag("image", 0)}、${refPromptTag("video", 0)}、${refPromptTag("audio", 0)} 按类型顺序引用，并写清各自负责什么。`
 
   return (
     <Field
@@ -71,11 +87,7 @@ export function ReferenceSlots({ drafts, onAdd, onRemove }: ReferenceSlotsProps)
         addDroppedFiles([...event.clipboardData.files], onAdd)
       }}
     >
-      <LabelWithHelp label="参考">
-        最多 {REF_LIMITS.image} 张图、{REF_LIMITS.video} 段视频、{REF_LIMITS.audio}{" "}
-        段音频。提示词用 {refPromptTag("image", 0)}、{refPromptTag("video", 0)}、
-        {refPromptTag("audio", 0)} 按类型顺序引用，并写清各自负责什么。
-      </LabelWithHelp>
+      <LabelWithHelp label={label}>{helpText}</LabelWithHelp>
 
       {tagged.length > 0 ? (
         <div className="flex flex-col gap-3">
@@ -97,6 +109,7 @@ export function ReferenceSlots({ drafts, onAdd, onRemove }: ReferenceSlotsProps)
                   type="button"
                   size="icon-sm"
                   variant="secondary"
+                  disabled={disabled}
                   onClick={() => onRemove(item.id)}
                 >
                   <XIcon />
@@ -129,13 +142,14 @@ export function ReferenceSlots({ drafts, onAdd, onRemove }: ReferenceSlotsProps)
       )}
 
       <div className="flex flex-wrap gap-2">
-        {ADD_OPTIONS.map((option) => (
+        {ADD_OPTIONS.filter((option) => kinds.includes(option.kind)).map((option) => (
           <AddRefButton
             key={option.kind}
             kind={option.kind}
             accept={option.accept}
             used={used[option.kind]}
             limit={REF_LIMITS[option.kind]}
+            disabled={disabled}
             onAdd={(files) => onAdd(option.kind, files)}
           />
         ))}
@@ -164,12 +178,14 @@ function AddRefButton({
   accept,
   used,
   limit,
+  disabled,
   onAdd,
 }: {
   kind: MediaKind
   accept: string
   used: number
   limit: number
+  disabled?: boolean
   onAdd: (files: File[]) => void
 }) {
   const inputRef = useRef<HTMLInputElement>(null)
@@ -180,7 +196,7 @@ function AddRefButton({
         type="button"
         variant="outline"
         size="sm"
-        disabled={full}
+        disabled={full || disabled}
         onClick={() => inputRef.current?.click()}
       >
         <PlusIcon data-icon="inline-start" />

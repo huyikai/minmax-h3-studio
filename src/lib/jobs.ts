@@ -2,7 +2,7 @@ import fs from "node:fs/promises"
 import path from "node:path"
 import type { Job, LongSegment, PublicJob } from "@/lib/types"
 import { dataDir, jobOutputDir, jobsPath } from "@/lib/paths"
-import { lastSuccessfulSegment, successfulSegments } from "@/lib/long-video"
+import { lastSuccessfulSegment, normalizeJob, successfulSegments } from "@/lib/long-video"
 
 async function ensure() {
   await fs.mkdir(dataDir(), { recursive: true })
@@ -13,7 +13,7 @@ export async function readJobs(): Promise<Job[]> {
   try {
     const raw = await fs.readFile(jobsPath(), "utf8")
     const parsed = JSON.parse(raw) as Job[]
-    return Array.isArray(parsed) ? parsed : []
+    return Array.isArray(parsed) ? parsed.map(normalizeJob) : []
   } catch {
     return []
   }
@@ -21,9 +21,22 @@ export async function readJobs(): Promise<Job[]> {
 
 async function writeJobs(jobs: Job[]) {
   await ensure()
-  const tmp = `${jobsPath()}.tmp`
-  await fs.writeFile(tmp, `${JSON.stringify(jobs, null, 2)}\n`, "utf8")
-  await fs.rename(tmp, jobsPath())
+  const target = jobsPath()
+  const tmp = `${target}.tmp`
+  const payload = `${JSON.stringify(jobs, null, 2)}\n`
+  await fs.writeFile(tmp, payload, "utf8")
+  let lastError: unknown
+  for (let attempt = 0; attempt < 10; attempt++) {
+    try {
+      await fs.copyFile(tmp, target)
+      await fs.unlink(tmp).catch(() => undefined)
+      return
+    } catch (error) {
+      lastError = error
+      await new Promise((resolve) => setTimeout(resolve, 30 * (attempt + 1)))
+    }
+  }
+  throw lastError
 }
 
 export async function getJob(id: string) {

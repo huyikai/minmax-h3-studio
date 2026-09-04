@@ -46,7 +46,7 @@ import { SettingsDialog } from "@/components/studio/settings-dialog"
 import { TaskList } from "@/components/studio/task-list"
 import { QueuePanel } from "@/components/studio/queue-panel"
 import { MonitorPanel, type MonitorMode } from "@/components/studio/monitor-panel"
-import { LongWorkspace, type LongGeneratePayload } from "@/components/studio/long-workspace"
+import { LongWorkspace, type LongCreatePayload, type LongGeneratePayload } from "@/components/studio/long-workspace"
 import { HomeBootSkeleton } from "@/components/studio/home-boot-skeleton"
 import { ThemeToggle } from "@/components/studio/theme-toggle"
 import { WorkspaceSplit } from "@/components/studio/workspace-split"
@@ -604,10 +604,25 @@ export function StudioApp() {
     if (!(await ensureEnvironment("long"))) return false
     setSubmitting(true)
     try {
+      const form = new FormData()
+      form.set("prompt", payload.prompt)
+      form.set("duration", String(payload.duration))
+      form.set("aspect", payload.aspect)
+      form.set("megapixels", String(payload.megapixels))
+      form.set("seed", String(payload.seed))
+      form.set("steps", String(payload.steps))
+      if (payload.redoIndex !== undefined) form.set("redoIndex", String(payload.redoIndex))
+      if (payload.firstFrame) form.set("segment:firstFrame", payload.firstFrame)
+      if (payload.lastFrame) form.set("segment:lastFrame", payload.lastFrame)
+      const counts = { image: 0, video: 0, audio: 0 }
+      for (const draft of payload.segmentRefs ?? []) {
+        const index = counts[draft.kind]
+        counts[draft.kind] += 1
+        form.set(`segment:ref${draft.kind === "image" ? "Image" : draft.kind === "video" ? "Video" : "Audio"}:${index}`, draft.file)
+      }
       const response = await fetch(`/api/jobs/${current.id}/segments`, {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(payload),
+        body: form,
       })
       const json = (await response.json()) as {
         job?: PublicJob
@@ -649,6 +664,52 @@ export function StudioApp() {
     }
   }
 
+  async function createLong(payload: LongCreatePayload): Promise<boolean> {
+    if (!(await ensureEnvironment("long"))) return false
+    setSubmitting(true)
+    try {
+      const form = new FormData()
+      form.set("kind", "long")
+      form.set("workflowFile", payload.workflowFile)
+      form.set("lockPrompt", payload.lockPrompt)
+      form.set("aspect", payload.aspect)
+      form.set("megapixels", String(payload.megapixels))
+      const counts = { image: 0, video: 0, audio: 0 }
+      for (const draft of payload.publicRefs) {
+        const index = counts[draft.kind]
+        counts[draft.kind] += 1
+        const slot =
+          draft.kind === "image" ? "refImage" : draft.kind === "video" ? "refVideo" : "refAudio"
+        form.set(`public:${slot}:${index}`, draft.file)
+      }
+      const response = await fetch("/api/jobs", { method: "POST", body: form })
+      const json = (await response.json()) as {
+        job?: PublicJob
+        error?: string
+        code?: string
+      }
+      if (response.status === 412 && json.code === "environment_incomplete") {
+        setFocusEnvironment(true)
+        setSettingsOpen(true)
+        toast.error(json.error ?? "环境还没就绪")
+        return false
+      }
+      if (!response.ok || !json.job) {
+        toast.error(json.error ?? "无法创建长视频任务")
+        return false
+      }
+      setJobs((list) => [json.job!, ...list.filter((item) => item.id !== json.job!.id)])
+      enterWorkspace("long", json.job)
+      toast.success("长视频任务已创建，公共锁定已冻结")
+      return true
+    } catch {
+      toast.error("无法创建长视频任务")
+      return false
+    } finally {
+      setSubmitting(false)
+    }
+  }
+
   function fillFromJob(job: PublicJob) {
     setPrompt(job.prompt)
     setDuration(String(job.duration))
@@ -680,18 +741,7 @@ export function StudioApp() {
   }
 
   async function openNewLong() {
-    const form = new FormData()
-    form.set("kind", "long")
-    form.set("aspect", aspect)
-    form.set("megapixels", String(megapixels))
-    const response = await fetch("/api/jobs", { method: "POST", body: form })
-    const json = (await response.json()) as { job?: PublicJob; error?: string }
-    if (!response.ok || !json.job) {
-      toast.error(json.error ?? "无法创建长视频任务")
-      return
-    }
-    setJobs((list) => [json.job!, ...list.filter((item) => item.id !== json.job!.id)])
-    enterWorkspace("long", json.job)
+    enterWorkspace("long", null)
   }
 
   async function openJob(job: PublicJob) {
@@ -898,7 +948,9 @@ export function StudioApp() {
     dynamicRefs,
     durationSeconds,
   })
-  const pickerWorkflows = workflows.filter((item) => item.picker !== false)
+  const pickerWorkflows = workflows.filter(
+    (item) => item.picker !== false && item.family !== "long"
+  )
   const hasSteps = Boolean(bundle?.mapping.steps)
   const hasCfg = Boolean(bundle?.mapping.cfg)
   const grouped = groupWorkflows(pickerWorkflows)
@@ -1156,10 +1208,10 @@ export function StudioApp() {
             </div>
             <div className="flex min-h-0 flex-1 overflow-hidden p-3">
               <div className="flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden rounded-xl border bg-card">
-                {shell === "long" && liveJob && isLongJob(liveJob) ? (
+                {shell === "long" ? (
                       <LongWorkspace
-                    key={liveJob.id}
-                    job={liveJob}
+                    key={liveJob?.id ?? "long-draft"}
+                    job={liveJob && isLongJob(liveJob) ? liveJob : null}
                     submitting={submitting}
                     prompt={prompt}
                     textareaRef={textareaRef}
@@ -1172,9 +1224,12 @@ export function StudioApp() {
                     onPromptChange={setPrompt}
                     onPromptFocus={() => setGuideOpen(true)}
                         onGenerate={(payload) => submitLong(payload)}
+                        onCreate={(payload) => createLong(payload)}
                         onFinalize={() => void finalizeLong(true)}
                         onReopen={() => void finalizeLong(false)}
                         workflows={workflows}
+                        defaultAspect={aspect}
+                        defaultMegapixels={megapixels}
                         onWorkflowChange={(name) => {
                           if (!current || current.long?.segments.length) return
                           void (async () => {

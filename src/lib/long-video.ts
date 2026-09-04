@@ -1,7 +1,16 @@
-import type { ApiWorkflow, Job, LongSegment, LongVideoState } from "@/lib/types"
-import { longWorkflowCapabilities } from "@/lib/default-workflows"
+import type {
+  ApiWorkflow,
+  Job,
+  LongSegment,
+  LongVideoState,
+  MediaKind,
+} from "@/lib/types"
+import {
+  LONG_T2V_FILE,
+  longWorkflowCapabilities,
+} from "@/lib/default-workflows"
 
-export const LONG_T2V_FILE = "h3-t2v-long.json"
+export { LONG_T2V_FILE }
 
 export const MOTION_CONTEXT_INSTALL_URL =
   "https://github.com/NikoDemon80/ComfyUI-H3-Motion-Context"
@@ -36,18 +45,145 @@ export function longWorkflowCapabilitiesForJob(
   )
 }
 
-export function longWorkflowIncompatibility(
+export type LongWorkflowInputFlags = {
+  hasReferences?: boolean
+  referenceKinds?: MediaKind[]
+  hasFirstFrame?: boolean
+  hasLastFrame?: boolean
+  hasAudio?: boolean
+  hasVideoReference?: boolean
+  hasImageReference?: boolean
+}
+
+export function longWorkflowInputFlags(input: {
+  publicRefs?: Array<{ kind?: MediaKind }>
+  segmentRefs?: Array<{ kind?: MediaKind }>
+  firstFrame?: unknown
+  lastFrame?: unknown
+}): LongWorkflowInputFlags {
+  const refs = [...(input.publicRefs ?? []), ...(input.segmentRefs ?? [])]
+  const kinds = refs
+    .map((item) => item.kind)
+    .filter((kind): kind is MediaKind => kind === "image" || kind === "video" || kind === "audio")
+  return {
+    hasReferences: kinds.length > 0,
+    referenceKinds: kinds,
+    hasFirstFrame: Boolean(input.firstFrame),
+    hasLastFrame: Boolean(input.lastFrame),
+    hasAudio: kinds.includes("audio"),
+    hasVideoReference: kinds.includes("video"),
+    hasImageReference: kinds.includes("image"),
+  }
+}
+
+export function longWorkflowDisableReason(
   workflowFile: string,
-  input: { hasReferences?: boolean; hasFirstFrame?: boolean; hasLastFrame?: boolean }
+  input: LongWorkflowInputFlags = {}
 ) {
   const capabilities = longWorkflowCapabilities(workflowFile)
   if (!capabilities) return "缺少长视频能力声明"
-  if (input.hasReferences && capabilities.publicReferenceKinds.length === 0) {
+  if (!capabilities.motionContext) return "缺少 Motion Context"
+  if (!capabilities.validated) {
+    return capabilities.unavailableReason ?? "尚未真实验证两段连续生成"
+  }
+  return longWorkflowIncompatibility(workflowFile, input)
+}
+
+export function longWorkflowIncompatibility(
+  workflowFile: string,
+  input: LongWorkflowInputFlags = {}
+) {
+  const capabilities = longWorkflowCapabilities(workflowFile)
+  if (!capabilities) return "缺少长视频能力声明"
+  if (!capabilities.motionContext) return "缺少 Motion Context"
+  const kinds = new Set(input.referenceKinds ?? [])
+  const hasImage = input.hasImageReference || kinds.has("image")
+  const hasVideo = input.hasVideoReference || kinds.has("video")
+  const hasAudio = input.hasAudio || kinds.has("audio")
+  const hasReferences = input.hasReferences || hasImage || hasVideo || hasAudio
+
+  if (hasReferences && capabilities.publicReferenceKinds.length === 0) {
+    if (hasImage) return "当前任务包含公共参考图片，不支持文生"
+    if (hasVideo) return "当前任务包含公共参考视频，不支持文生"
+    if (hasAudio) return "当前任务包含公共参考音频，不支持文生"
     return "当前任务包含参考元素，不支持文生长视频"
   }
-  if (input.hasFirstFrame && !capabilities.supportsFirstFrame) return "不支持首帧"
-  if (input.hasLastFrame && !capabilities.supportsLastFrame) return "不支持当前段尾帧"
+  if (hasImage && !capabilities.supportsImageReference) {
+    return "当前任务包含公共参考图片，不支持文生"
+  }
+  if (hasVideo && !capabilities.supportsVideoReference) {
+    return "有视频参考时，只支持能接参考视频的长视频工作流"
+  }
+  if (hasAudio && !capabilities.supportsAudio) {
+    return "有音频时，只支持能接参考音频的长视频工作流"
+  }
+  if (input.hasFirstFrame && !capabilities.supportsFirstFrame) {
+    return "有首帧时，只支持图生或首尾帧长视频"
+  }
+  if (input.hasLastFrame) {
+    if (!capabilities.supportsLastFrame) return "不支持当前段尾帧"
+    if (!capabilities.supportsMotionContextWithLastFrame) {
+      return "Motion Context 不能与尾帧同时接入"
+    }
+  }
   return undefined
+}
+
+export function canChangeLongWorkflow(job: Pick<Job, "kind" | "long">) {
+  if (!isLongJob(job) || !job.long) return false
+  return job.long.segments.length === 0
+}
+
+export function isLongLockFrozen(state: LongVideoState | undefined) {
+  if (!state) return false
+  if (state.lockFrozen !== undefined) return state.lockFrozen
+  return liveSegments(state).length > 0
+}
+
+export function canChangeLockPrompt(job: Pick<Job, "kind" | "long">) {
+  if (!isLongJob(job) || !job.long) return false
+  return !isLongLockFrozen(job.long)
+}
+
+export function normalizeLongState(
+  job: Pick<Job, "workflowFile" | "long" | "kind">
+): LongVideoState {
+  const current = job.long
+  const workflowFile =
+    current?.workflowFile || job.workflowFile || LONG_T2V_FILE
+  const capabilities = longWorkflowCapabilities(workflowFile)
+  return {
+    workflowFile,
+    workflowKind: current?.workflowKind ?? capabilities?.kind ?? "t2v",
+    lockPrompt: current?.lockPrompt ?? "",
+    publicLockRefs: current?.publicLockRefs ?? [],
+    lockFrozen: current?.lockFrozen ?? liveSegments(current).length > 0,
+    finalized: Boolean(current?.finalized),
+    aspectLocked: Boolean(current?.aspectLocked),
+    segments: (current?.segments ?? []).map(normalizeLongSegment),
+    stitchedFile: current?.stitchedFile,
+    stitchError: current?.stitchError,
+  }
+}
+
+export function normalizeLongSegment(segment: LongSegment): LongSegment {
+  return {
+    ...segment,
+    segmentRefs: segment.segmentRefs ?? [],
+  }
+}
+
+export function normalizeJob<T extends Job>(job: T): T {
+  if (job.kind !== "long" && !job.long) {
+    return { ...job, kind: job.kind ?? "short" }
+  }
+  const long = normalizeLongState(job)
+  return {
+    ...job,
+    kind: "long",
+    workflowFile: long.workflowFile || job.workflowFile || LONG_T2V_FILE,
+    long,
+  }
 }
 
 
@@ -64,6 +200,8 @@ export function emptyLongState(
     workflowFile,
     workflowKind: capabilities?.kind ?? "t2v",
     lockPrompt,
+    publicLockRefs: [],
+    lockFrozen: true,
     finalized: false,
     aspectLocked: false,
     segments: [],
@@ -231,6 +369,13 @@ function findClass(workflow: ApiWorkflow, classType: string) {
   return Object.entries(workflow).find(([, node]) => node.class_type === classType)
 }
 
+function findH3Node(workflow: ApiWorkflow) {
+  return (
+    findClass(workflow, "MiniMaxH3ImageToVideo") ??
+    findClass(workflow, "MiniMaxH3ReferenceToVideo")
+  )
+}
+
 export function patchLongChain(
   workflow: ApiWorkflow,
   options: { jobId: string; clipIndex: number; loadPrevious: boolean }
@@ -259,7 +404,7 @@ export function patchLongChain(
     if (load) delete next[load[0]]
     if (motion) delete next[motion[0]]
     if (guider) {
-      const h3 = findClass(next, "MiniMaxH3ImageToVideo")
+      const h3 = findH3Node(next)
       if (h3) guider[1].inputs.conditioning = [h3[0], 0]
     }
     if (trim) trim[1].inputs.trim_frames = 0

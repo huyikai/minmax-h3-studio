@@ -1,6 +1,6 @@
 "use client"
 
-import { useEffect, useMemo, useRef, useState } from "react"
+import { useEffect, useMemo, useRef, useState, type Dispatch, type SetStateAction } from "react"
 import {
   AlertCircleIcon,
   ArchiveIcon,
@@ -38,8 +38,9 @@ import { ToggleGroup, ToggleGroupItem } from "@/components/ui/toggle-group"
 import { LabelWithHelp } from "@/components/studio/field-help"
 import { ASPECT_PRESETS, DURATION_OPTIONS, LONG_STEP_OPTIONS } from "@/lib/types"
 import { ResolutionPicker } from "@/components/studio/resolution-picker"
-import type { LongSegment, PublicJob } from "@/lib/types"
+import type { LongSegment, MediaKind, PublicJob, StoredInputMedia } from "@/lib/types"
 import type { WorkflowListItem } from "@/lib/default-workflows"
+import { LONG_T2V_FILE, longWorkflowCapabilities } from "@/lib/default-workflows"
 import { isBusyJob } from "@/lib/job-view"
 import {
   canDispatchLongSegment,
@@ -48,6 +49,7 @@ import {
   lastSuccessfulSegment,
   laterSegments,
   liveSegments,
+  longWorkflowInputFlags,
   mergeLockIntoPrompt,
   nextClipIndex,
   queuedLongSegments,
@@ -55,6 +57,13 @@ import {
   runningLongSegment,
   successfulSegments,
 } from "@/lib/long-video"
+import { LongWorkflowPicker } from "@/components/studio/long-workflow-picker"
+import { MediaSlots, type SlotFile } from "@/components/studio/media-slots"
+import {
+  ReferenceSlots,
+  type RefDraft,
+} from "@/components/studio/reference-slots"
+import { REF_LIMITS } from "@/lib/refs"
 import { cn } from "@/lib/utils"
 
 function randomSeed() {
@@ -230,9 +239,19 @@ export type LongGeneratePayload = {
   aspect: string
   megapixels: number
   seed: number
-  lockPrompt: string
   steps: number
   redoIndex?: number
+  firstFrame?: File
+  lastFrame?: File
+  segmentRefs?: RefDraft[]
+}
+
+export type LongCreatePayload = {
+  workflowFile: string
+  lockPrompt: string
+  aspect: string
+  megapixels: number
+  publicRefs: RefDraft[]
 }
 
 export function LongWorkspace({
@@ -246,12 +265,15 @@ export function LongWorkspace({
   onPromptChange,
   onPromptFocus,
   onGenerate,
+  onCreate,
   onFinalize,
   onReopen,
   workflows,
   onWorkflowChange,
+  defaultAspect,
+  defaultMegapixels,
 }: {
-  job: PublicJob
+  job: PublicJob | null
   submitting: boolean
   prompt: string
   textareaRef: React.RefObject<HTMLTextAreaElement | null>
@@ -261,25 +283,33 @@ export function LongWorkspace({
   onPromptChange: (value: string | ((prev: string) => string)) => void
   onPromptFocus?: () => void
   onGenerate: (payload: LongGeneratePayload) => Promise<boolean>
+  onCreate: (payload: LongCreatePayload) => Promise<boolean>
   onFinalize: () => void
   onReopen: () => void
   workflows: WorkflowListItem[]
   onWorkflowChange: (name: string) => void
+  defaultAspect: string
+  defaultMegapixels: number
 }) {
-  const long = job.long
-  const busy = isBusyJob(job)
+  const long = job?.long
+  const created = Boolean(job)
+  const busy = job ? isBusyJob(job) : false
   const finalized = Boolean(long?.finalized)
   const aspectLocked = Boolean(long?.aspectLocked)
   const retry = retryableSegment(long)
   const nextIndex = nextClipIndex(long)
   const successCount = successfulSegments(long).length
   const unfinished = hasUnfinishedSegments(long)
+  const workflowLocked = (long?.segments.length ?? 0) > 0
 
   const [lockPrompt, setLockPrompt] = useState(long?.lockPrompt ?? "")
+  const [draftWorkflow, setDraftWorkflow] = useState(
+    long?.workflowFile || job?.workflowFile || LONG_T2V_FILE
+  )
   const [duration, setDuration] = useState("5")
-  const [aspect, setAspect] = useState(job.aspect)
-  const [megapixels, setMegapixels] = useState(job.megapixels ?? 0.98)
-  const [steps, setSteps] = useState(String(job.steps ?? 20))
+  const [aspect, setAspect] = useState(job?.aspect ?? defaultAspect)
+  const [megapixels, setMegapixels] = useState(job?.megapixels ?? defaultMegapixels)
+  const [steps, setSteps] = useState(String(job?.steps ?? 20))
   const [seed, setSeed] = useState(randomSeed())
   const [randomize, setRandomize] = useState(true)
   const [redoIndex, setRedoIndex] = useState<number | null>(null)
@@ -288,12 +318,27 @@ export function LongWorkspace({
   const [segmentFilter, setSegmentFilter] = useState<SegmentFilter>("all")
   const [expandedSegments, setExpandedSegments] = useState<Set<number>>(new Set())
   const [voidedOpen, setVoidedOpen] = useState(false)
+  const [publicDrafts, setPublicDrafts] = useState<RefDraft[]>([])
+  const [segmentDrafts, setSegmentDrafts] = useState<RefDraft[]>([])
+  const [firstFrameFile, setFirstFrameFile] = useState<SlotFile | undefined>()
+  const [lastFrameFile, setLastFrameFile] = useState<SlotFile | undefined>()
   const segmentRefs = useRef<Record<number, HTMLLIElement | null>>({})
   const segmentListRef = useRef<HTMLDivElement | null>(null)
   const editorScrollRef = useRef<HTMLDivElement | null>(null)
   const filterScrollPositions = useRef<Partial<Record<SegmentFilter, number>>>({})
   const lastAutoScrollTarget = useRef<string | null>(null)
   const previousFilter = useRef<SegmentFilter>("all")
+  const workflowFile = long?.workflowFile || job?.workflowFile || draftWorkflow
+  const capabilities = longWorkflowCapabilities(workflowFile)
+  const publicRefs = long?.publicLockRefs ?? []
+  const pickerInput = longWorkflowInputFlags({
+    publicRefs: created
+      ? publicRefs
+      : publicDrafts.map((item) => ({ kind: item.kind })),
+    segmentRefs: segmentDrafts.map((item) => ({ kind: item.kind })),
+    firstFrame: firstFrameFile,
+    lastFrame: lastFrameFile,
+  })
 
   const segments = liveSegments(long)
   const voidedSegments = (long?.segments ?? [])
@@ -361,7 +406,7 @@ export function LongWorkspace({
 
   useEffect(() => {
     onPromptChange("")
-  }, [job.id, onPromptChange])
+  }, [job?.id, onPromptChange])
 
   const retryIndex = retry?.index
   const retryStatus = retry?.status
@@ -384,7 +429,7 @@ export function LongWorkspace({
     setSeed(retrySeed)
     setRandomize(false)
   }, [
-    job.id,
+    job?.id,
     onPromptChange,
     retryDuration,
     retryIndex,
@@ -444,13 +489,66 @@ export function LongWorkspace({
       aspect,
       megapixels,
       seed: nextSeed,
-      lockPrompt,
       steps: Number(steps) || 20,
       redoIndex: redoIndex ?? retry?.index,
+      firstFrame: firstFrameFile?.file,
+      lastFrame: lastFrameFile?.file,
+      segmentRefs: segmentDrafts,
     })
     if (!ok) return
     onPromptChange("")
     setRedoIndex(null)
+    clearSegmentMedia()
+  }
+
+  async function submitCreate() {
+    const ok = await onCreate({
+      workflowFile,
+      lockPrompt,
+      aspect,
+      megapixels,
+      publicRefs: publicDrafts,
+    })
+    if (!ok) return
+    for (const item of publicDrafts) URL.revokeObjectURL(item.preview)
+    setPublicDrafts([])
+  }
+
+  function clearSegmentMedia() {
+    if (firstFrameFile) URL.revokeObjectURL(firstFrameFile.preview)
+    if (lastFrameFile) URL.revokeObjectURL(lastFrameFile.preview)
+    for (const item of segmentDrafts) URL.revokeObjectURL(item.preview)
+    setFirstFrameFile(undefined)
+    setLastFrameFile(undefined)
+    setSegmentDrafts([])
+  }
+
+  function addDrafts(
+    setter: Dispatch<SetStateAction<RefDraft[]>>,
+    kind: MediaKind,
+    files: File[],
+    used: number
+  ) {
+    const room = Math.max(0, REF_LIMITS[kind] - used)
+    setter((current) => [
+      ...current,
+      ...files.slice(0, room).map((file) => ({
+        id: `${kind}-${file.name}-${file.size}-${file.lastModified}-${Math.random()}`,
+        kind,
+        file,
+        preview: URL.createObjectURL(file),
+      })),
+    ])
+  }
+
+  function setSlot(slotId: "firstFrame" | "lastFrame", file: File | null) {
+    const current = slotId === "firstFrame" ? firstFrameFile : lastFrameFile
+    if (current) URL.revokeObjectURL(current.preview)
+    const next = file
+      ? { file, preview: URL.createObjectURL(file) }
+      : undefined
+    if (slotId === "firstFrame") setFirstFrameFile(next)
+    else setLastFrameFile(next)
   }
 
   const submittedPreview = useMemo(
@@ -460,10 +558,23 @@ export function LongWorkspace({
   const targetIndex = redoIndex ?? nextIndex
   const settingsLocked = aspectLocked && targetIndex > 1
   const readOnly = finalized
+  const lockReadOnly = created || readOnly
   const laterCount = laterSegments(long, targetIndex).length
   const generateDisabled =
-    readOnly || submitting || !prompt.trim() || Boolean(retry && targetIndex > retry.index)
+    readOnly ||
+    submitting ||
+    !prompt.trim() ||
+    Boolean(retry && targetIndex > retry.index) ||
+    Boolean(capabilities?.supportsFirstFrame && targetIndex === 1 && !firstFrameFile)
+  const createDisabled = submitting || !workflowFile
   const needsSubmitConfirm = laterCount > 0 || redoIndex !== null
+  const showFirstFrame = Boolean(capabilities?.supportsFirstFrame && targetIndex === 1)
+  const showLastFrame = Boolean(
+    capabilities?.supportsLastFrame &&
+      (targetIndex === 1 || capabilities.supportsMotionContextWithLastFrame)
+  )
+  const publicKinds = capabilities?.publicReferenceKinds ?? []
+  const segmentKinds = capabilities?.segmentReferenceKinds ?? []
 
   return (
     <div className="flex min-h-0 flex-1 flex-col">
@@ -475,42 +586,73 @@ export function LongWorkspace({
             </LabelWithHelp>
             <Textarea
               id="long-lock"
-              value={lockPrompt}
+              value={created ? (long?.lockPrompt ?? lockPrompt) : lockPrompt}
               onChange={(event) => setLockPrompt(event.target.value)}
               placeholder="身份、服装、光线等整条片子要锁住的句子"
               className="min-h-24"
-              disabled={readOnly}
+              disabled={lockReadOnly}
             />
+            <FieldDescription>
+              {created
+                ? "创建任务后公共锁定文本和公共参考都不能再改。"
+                : "创建任务时写入，之后每一段自动带上，不能再改。"}
+            </FieldDescription>
           </Field>
 
           <Field>
             <LabelWithHelp label="长视频工作流">
-              创建后锁定。当前仅显示已接入 Motion Context 的长视频工作流。
+              按类型分组。不兼容项会显示但禁用。已有片段后锁定。移除冲突素材后会自动恢复可选。
             </LabelWithHelp>
-            <div className="flex flex-col gap-1.5">
-              {workflows.filter((item) => item.family === "long").map((item) => (
-                <button
-                  key={item.name}
-                  type="button"
-                  disabled={readOnly}
-                  onClick={() => onWorkflowChange(item.name)}
-                  className={cn(
-                    "rounded-md border px-3 py-2 text-left text-sm transition-colors",
-                    job.workflowFile === item.name
-                      ? "border-primary bg-primary/10"
-                      : "border-border hover:bg-muted/50",
-                    readOnly && "cursor-not-allowed opacity-60"
-                  )}
-                >
-                  <span className="font-medium">{item.label}</span>
-                  <span className="mt-0.5 block text-xs text-muted-foreground">{item.description}</span>
-                </button>
-              ))}
-              {workflows.every((item) => item.family !== "long") ? (
-                <p className="text-xs text-muted-foreground">暂无其他长视频工作流。</p>
-              ) : null}
-            </div>
+            <LongWorkflowPicker
+              workflows={workflows}
+              selected={workflowFile}
+              input={pickerInput}
+              locked={workflowLocked || readOnly}
+              onChange={(name) => {
+                if (created) onWorkflowChange(name)
+                else setDraftWorkflow(name)
+              }}
+            />
           </Field>
+
+          {publicKinds.length > 0 || publicRefs.length > 0 || publicDrafts.length > 0 ? (
+            <Field>
+              {created ? (
+                <>
+                  <LabelWithHelp label="公共参考元素">
+                    创建时锁定，后续每一段自动注入，不能被当前段参考覆盖。
+                  </LabelWithHelp>
+                  <FrozenMediaList jobId={job?.id} items={publicRefs} empty="没有公共参考。" />
+                </>
+              ) : (
+                <ReferenceSlots
+                  drafts={publicDrafts}
+                  allowedKinds={publicKinds}
+                  label="公共参考元素"
+                  help="上传到这里的素材会跨所有片段使用。创建任务后不能再改。公共参考占用的标签从 1 起算。"
+                  onAdd={(kind, files) =>
+                    addDrafts(
+                      setPublicDrafts,
+                      kind,
+                      files,
+                      publicDrafts.filter((item) => item.kind === kind).length
+                    )
+                  }
+                  onRemove={(id) => {
+                    setPublicDrafts((current) => {
+                      const found = current.find((item) => item.id === id)
+                      if (found) URL.revokeObjectURL(found.preview)
+                      return current.filter((item) => item.id !== id)
+                    })
+                  }}
+                />
+              )}
+            </Field>
+          ) : created ? null : (
+            <p className="text-xs text-muted-foreground">
+              当前工作流不支持公共参考。有参考图、视频或音频时，文生链会禁用。
+            </p>
+          )}
           <Field>
             <div
               id="long-segment-list"
@@ -694,7 +836,7 @@ export function LongWorkspace({
               onFocus={onPromptFocus}
               placeholder="聚焦后右侧显示写法"
               className="min-h-44"
-              disabled={readOnly}
+              disabled={readOnly || !created}
             />
             <FieldDescription>
               {redoIndex
@@ -703,9 +845,78 @@ export function LongWorkspace({
                   ? laterCount > 0
                     ? `第 ${retry.index} 段失败或中断，后面的段先挂着。重提会丢掉后面，并排到队尾。`
                     : `重提第 ${retry.index} 段。`
-                  : `生成第 ${targetIndex} 段，提交后进入队列。`}
+                  : created
+                    ? `生成第 ${targetIndex} 段，提交后进入队列。`
+                    : "先创建任务并锁住公共设定，再写第 1 段。"}
             </FieldDescription>
           </Field>
+
+          {created && (showFirstFrame || showLastFrame || segmentKinds.length > 0) ? (
+            <div className="flex flex-col gap-3">
+              {showFirstFrame ? (
+                <MediaSlots
+                  slots={[
+                    {
+                      id: "firstFrame",
+                      kind: "image",
+                      role: "firstFrame",
+                      label: "第一段专用首帧",
+                      help: "只接受图片。只作用于第 1 段。后续段首帧来自 Motion Context。",
+                      nodeId: "firstFrame",
+                      input: "image",
+                      h3NodeId: "",
+                      h3Input: "first_frame",
+                    },
+                  ]}
+                  files={firstFrameFile ? { firstFrame: firstFrameFile } : {}}
+                  onChange={(slotId, file) => setSlot("firstFrame", file)}
+                />
+              ) : null}
+              {showLastFrame ? (
+                <MediaSlots
+                  slots={[
+                    {
+                      id: "lastFrame",
+                      kind: "image",
+                      role: "lastFrame",
+                      label: `第 ${targetIndex} 段尾帧`,
+                      help: "只接受图片，可空。只作用于当前段。",
+                      nodeId: "lastFrame",
+                      input: "image",
+                      h3NodeId: "",
+                      h3Input: "last_frame",
+                    },
+                  ]}
+                  files={lastFrameFile ? { lastFrame: lastFrameFile } : {}}
+                  onChange={(slotId, file) => setSlot("lastFrame", file)}
+                />
+              ) : null}
+              {segmentKinds.length > 0 ? (
+                <ReferenceSlots
+                  drafts={segmentDrafts}
+                  allowedKinds={segmentKinds}
+                  label={`第 ${targetIndex} 段参考元素`}
+                  help="只作用于当前段。不会改公共锁定。公共参考占用的标签在前，本段从后面接着编号。"
+                  disabled={readOnly}
+                  onAdd={(kind, files) =>
+                    addDrafts(
+                      setSegmentDrafts,
+                      kind,
+                      files,
+                      segmentDrafts.filter((item) => item.kind === kind).length
+                    )
+                  }
+                  onRemove={(id) => {
+                    setSegmentDrafts((current) => {
+                      const found = current.find((item) => item.id === id)
+                      if (found) URL.revokeObjectURL(found.preview)
+                      return current.filter((item) => item.id !== id)
+                    })
+                  }}
+                />
+              ) : null}
+            </div>
+          ) : null}
 
           {prompt.trim() && lockPrompt.trim() ? (
             <Field>
@@ -785,7 +996,7 @@ export function LongWorkspace({
             </LabelWithHelp>
             <ToggleGroup
               type="single"
-              value={targetIndex > 1 ? String(job.steps ?? 20) : steps}
+              value={targetIndex > 1 ? String(job?.steps ?? 20) : steps}
               onValueChange={(value) => {
                 if (value) setSteps(value)
               }}
@@ -835,16 +1046,29 @@ export function LongWorkspace({
 
       <div className="flex shrink-0 flex-col gap-3 border-t px-4 py-3">
         <p className="text-xs leading-relaxed text-muted-foreground text-pretty">
-          {retry
-            ? `第 ${retry.index} 段需要重写。后面已排队的段先挂着，确认后会丢掉并排到队尾。`
-            : busy
-              ? "监视器看着当前段。再点生成会把下一段排到队尾，不必等这一段跑完。"
-              : finalized
-                ? "已定稿。撤销后仍从最后成功的一段接着写。"
-                : "可以连续往队列里加段。有未完成的段时不能定稿。"}
+          {!created
+            ? "先选工作流、写公共锁定并上传公共参考，再创建任务。创建后这些内容会冻结。"
+            : retry
+              ? `第 ${retry.index} 段需要重写。后面已排队的段先挂着，确认后会丢掉并排到队尾。`
+              : busy
+                ? "监视器看着当前段。再点生成会把下一段排到队尾，不必等这一段跑完。"
+                : finalized
+                  ? "已定稿。撤销后仍从最后成功的一段接着写。"
+                  : "可以连续往队列里加段。有未完成的段时不能定稿。"}
         </p>
         <div className="flex flex-col gap-2">
-          {finalized ? (
+          {!created ? (
+            <Button
+              type="button"
+              size="lg"
+              className="h-11 w-full"
+              disabled={createDisabled}
+              onClick={() => void submitCreate()}
+            >
+              {submitting ? <Spinner data-icon="inline-start" /> : null}
+              {submitting ? "创建中" : "创建这条长视频"}
+            </Button>
+          ) : finalized ? (
             <Button type="button" variant="outline" onClick={onReopen}>
               撤销定稿
             </Button>
@@ -889,9 +1113,9 @@ export function LongWorkspace({
                     onPromptChange("")
                     setRandomize(true)
                     setSeed(randomSeed())
-                    setAspect(job.aspect)
-                    setMegapixels(job.megapixels ?? 0.98)
-                    setSteps(String(job.steps ?? 20))
+                    setAspect(job?.aspect ?? defaultAspect)
+                    setMegapixels(job?.megapixels ?? defaultMegapixels)
+                    setSteps(String(job?.steps ?? 20))
                   }}
                 >
                   取消重写，改为写下一段
@@ -969,5 +1193,51 @@ export function LongWorkspace({
         </AlertDialogContent>
       </AlertDialog>
     </div>
+  )
+}
+
+function FrozenMediaList({
+  jobId,
+  items,
+  empty,
+}: {
+  jobId?: string
+  items: StoredInputMedia[]
+  empty: string
+}) {
+  if (items.length === 0) {
+    return <p className="text-xs text-muted-foreground">{empty}</p>
+  }
+  return (
+    <ul className="flex flex-col gap-2">
+      {items.map((item) => {
+        const url =
+          jobId && item.file
+            ? `/api/outputs/${jobId}/inputs/${encodeURIComponent(item.file)}`
+            : undefined
+        return (
+          <li
+            key={`${item.scope ?? "public"}-${item.slotId}-${item.file}`}
+            className="rounded-md border p-2"
+          >
+            <p className="truncate font-mono text-[11px] text-muted-foreground">
+              {item.originalName}
+            </p>
+            {url && item.kind === "image" ? (
+              // eslint-disable-next-line @next/next/no-img-element
+              <img
+                src={url}
+                alt={item.originalName}
+                className="mt-1 max-h-28 w-full rounded-md object-contain"
+              />
+            ) : url && item.kind === "video" ? (
+              <video src={url} className="mt-1 max-h-28 w-full rounded-md" muted playsInline controls />
+            ) : url && item.kind === "audio" ? (
+              <audio src={url} className="mt-1 w-full" controls />
+            ) : null}
+          </li>
+        )
+      })}
+    </ul>
   )
 }

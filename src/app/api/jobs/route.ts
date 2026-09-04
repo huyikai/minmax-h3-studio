@@ -4,10 +4,11 @@ import { resolutionFor, resolutionPreset } from "@/lib/resolution"
 import type { Job, LoraFormValue } from "@/lib/types"
 import { normalizeLora } from "@/lib/lora"
 import { listJobs, removeJobs, toPublicJob, upsertJob, getJob } from "@/lib/jobs"
-import { evaluateEnvironment, environmentLineFor } from "@/lib/environment"
-import { emptyLongState, LONG_T2V_FILE } from "@/lib/long-video"
+import { evaluateEnvironment, environmentLineFor, evaluateLongWorkflowEnvironment } from "@/lib/environment"
+import { emptyLongState, LONG_T2V_FILE, longWorkflowIncompatibility, longWorkflowInputFlags } from "@/lib/long-video"
 import { longWorkflowCapabilities } from "@/lib/default-workflows"
-import { persistUploadedMedia } from "@/lib/job-media"
+import { persistLongMedia, persistUploadedMedia } from "@/lib/job-media"
+import { validateLongCreateMedia } from "@/lib/long-media"
 import { afterEnqueue, ensureBootPause, pumpQueue, queueSnapshot } from "@/lib/studio-queue"
 import { newClientId } from "@/lib/comfy"
 import { readWorkflowBundle } from "@/lib/workflow-service"
@@ -149,12 +150,51 @@ async function createLongJob(form: FormData) {
   const aspect = String(form.get("aspect") ?? "16:9")
   const megapixels = resolutionPreset(form.get("megapixels")) ?? 0.98
   const lockPrompt = String(form.get("lockPrompt") ?? "")
+  const jobId = randomUUID()
+  let publicLockRefs
+  try {
+    const collected = await persistLongMedia(jobId, form, {
+      scope: "public",
+      capabilities,
+    })
+    if (collected.firstFrame || collected.lastFrame) {
+      return Response.json({ error: "公共锁定区只接受参考元素，不要上传首帧或尾帧" }, { status: 400 })
+    }
+    publicLockRefs = collected.refs
+  } catch (error) {
+    return Response.json(
+      { error: error instanceof Error ? error.message : "公共参考无效" },
+      { status: 400 }
+    )
+  }
+  const mediaError = validateLongCreateMedia({
+    workflowFile,
+    publicRefs: publicLockRefs,
+  })
+  if (mediaError) {
+    return Response.json({ error: mediaError }, { status: 400 })
+  }
+  const incompatible = longWorkflowIncompatibility(
+    workflowFile,
+    longWorkflowInputFlags({ publicRefs: publicLockRefs })
+  )
+  if (incompatible) {
+    return Response.json({ error: incompatible }, { status: 400 })
+  }
+  const env = await evaluateLongWorkflowEnvironment(workflowFile)
+  if (!env.ready) {
+    return Response.json(
+      { error: env.summary, code: "environment_incomplete", gaps: env.gaps },
+      { status: 412 }
+    )
+  }
   const preset =
     ASPECT_PRESETS.find((item) => item.id === aspect) ?? ASPECT_PRESETS[0]
   const resolution = resolutionFor(preset.id, megapixels)
   const now = new Date().toISOString()
+  const long = emptyLongState(lockPrompt, workflowFile)
   const job: Job = {
-    id: randomUUID(),
+    id: jobId,
     createdAt: now,
     updatedAt: now,
     status: "awaiting",
@@ -170,7 +210,13 @@ async function createLongJob(form: FormData) {
     seed: 0,
     loras: [],
     clientId: newClientId(),
-    long: emptyLongState(lockPrompt, workflowFile),
+    mediaNames: publicLockRefs.map((item) => item.originalName),
+    inputMedia: publicLockRefs,
+    long: {
+      ...long,
+      publicLockRefs,
+      lockFrozen: true,
+    },
   }
   const saved = await upsertJob(job)
   return Response.json({ job: toPublicJob(saved) })

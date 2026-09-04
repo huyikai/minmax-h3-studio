@@ -7,6 +7,7 @@ import { ensureJobWatch, writeSubmittedWorkflow } from "@/lib/runner"
 import { readSettings, writeSettings } from "@/lib/settings"
 import { fl2vaFile } from "@/lib/h3-models"
 import { isLongJob, patchLongChain, waitingSegment, canDispatchLongSegment } from "@/lib/long-video"
+import { storedMediaForSegment } from "@/lib/long-media"
 import { uploadStoredMedia } from "@/lib/job-media"
 
 export async function dispatchWaitingJob(job: Job, segmentIndex?: number) {
@@ -95,6 +96,8 @@ async function dispatchLong(job: Job, segmentIndex?: number) {
   const bundle = await readWorkflowBundle(job.workflowFile)
   const { data } = await readWorkflowFile(job.workflowFile)
   const workflow = parseApiWorkflow(data)
+  const stored = storedMediaForSegment(job, segment.index)
+  const media = await uploadStoredMedia(job.id, stored)
   const patched = patchLongChain(
     applyH3UnetName(
       applyPatch(workflow, bundle.mapping, {
@@ -103,6 +106,7 @@ async function dispatchLong(job: Job, segmentIndex?: number) {
         width: job.width,
         height: job.height,
         seed: segment.seed,
+        media,
         loras: [],
         steps: job.steps ?? 20,
       }),

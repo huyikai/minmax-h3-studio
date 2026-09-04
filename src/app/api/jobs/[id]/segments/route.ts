@@ -2,13 +2,17 @@ import { ASPECT_PRESETS, DURATION_OPTIONS, LONG_STEP_OPTIONS } from "@/lib/types
 import type { Job, LongSegment } from "@/lib/types"
 import { resolutionFor, resolutionPreset } from "@/lib/resolution"
 import { getJob, toPublicJob, upsertJob } from "@/lib/jobs"
-import { evaluateEnvironment } from "@/lib/environment"
+import { evaluateLongWorkflowEnvironment } from "@/lib/environment"
 import { afterEnqueue, queueSnapshot } from "@/lib/studio-queue"
 import { newClientId } from "@/lib/comfy"
 import { stopActiveRun } from "@/lib/job-interrupt"
+import { persistLongMedia } from "@/lib/job-media"
+import { publicLockRefs, validateLongSegmentMedia } from "@/lib/long-media"
+import { longWorkflowCapabilities } from "@/lib/default-workflows"
 import {
   chainBreakSegment,
   isLongJob,
+  isLongLockFrozen,
   laterSegments,
   liveSegments,
   mergeLockIntoPrompt,
@@ -35,6 +39,31 @@ function parseSteps(value: unknown, fallback: number) {
   return fallback
 }
 
+async function parseBody(request: Request): Promise<{ body: Body; form?: FormData }> {
+  const contentType = request.headers.get("content-type") ?? ""
+  if (contentType.includes("multipart/form-data")) {
+    const form = await request.formData()
+    const redoRaw = form.get("redoIndex")
+    return {
+      form,
+      body: {
+        prompt: String(form.get("prompt") ?? ""),
+        duration: form.get("duration") ? Number(form.get("duration")) : undefined,
+        aspect: form.get("aspect") ? String(form.get("aspect")) : undefined,
+        megapixels: form.get("megapixels") ? Number(form.get("megapixels")) : undefined,
+        steps: form.get("steps") ? Number(form.get("steps")) : undefined,
+        seed: form.get("seed") ? Number(form.get("seed")) : undefined,
+        lockPrompt: form.get("lockPrompt") != null ? String(form.get("lockPrompt")) : undefined,
+        redoIndex:
+          redoRaw !== null && redoRaw !== "" && Number.isInteger(Number(redoRaw))
+            ? Number(redoRaw)
+            : undefined,
+      },
+    }
+  }
+  return { body: (await request.json()) as Body }
+}
+
 export async function POST(
   request: Request,
   context: RouteContext<"/api/jobs/[id]/segments">
@@ -52,7 +81,7 @@ export async function POST(
     )
   }
 
-  const body = (await request.json()) as Body
+  const { body, form } = await parseBody(request)
   const prompt = String(body.prompt ?? "").trim()
   if (!prompt) {
     return Response.json({ error: "请填写这一段的提示词" }, { status: 400 })
@@ -67,8 +96,14 @@ export async function POST(
     ? Number(body.seed)
     : Math.floor(Math.random() * 1_000_000_000)
 
-  const lockPrompt =
-    body.lockPrompt !== undefined ? String(body.lockPrompt) : job.long.lockPrompt
+  if (
+    body.lockPrompt !== undefined &&
+    isLongLockFrozen(job.long) &&
+    String(body.lockPrompt) !== job.long.lockPrompt
+  ) {
+    return Response.json({ error: "公共锁定已冻结，不能修改" }, { status: 409 })
+  }
+  const lockPrompt = job.long.lockPrompt
 
   const redoIndex =
     typeof body.redoIndex === "number" && Number.isInteger(body.redoIndex)
@@ -171,7 +206,50 @@ export async function POST(
   const steps =
     clipIndex === 1 ? parseSteps(body.steps, job.steps ?? 20) : (job.steps ?? 20)
 
-  const env = await evaluateEnvironment("long")
+  const workflowFile = job.long.workflowFile || job.workflowFile
+  const capabilities = longWorkflowCapabilities(workflowFile)
+  if (!capabilities?.motionContext) {
+    return Response.json({ error: "请选择包含 Motion Context 的长视频工作流" }, { status: 400 })
+  }
+
+  let segmentRefs = existing?.segmentRefs ?? []
+  let firstFrame = existing?.firstFrame
+  let lastFrame = existing?.lastFrame
+  if (form) {
+    try {
+      const collected = await persistLongMedia(job.id, form, {
+        scope: "segment",
+        segmentIndex: clipIndex,
+        capabilities,
+      })
+      segmentRefs = collected.refs
+      firstFrame = collected.firstFrame
+      lastFrame = collected.lastFrame
+    } catch (error) {
+      return Response.json(
+        { error: error instanceof Error ? error.message : "当前段参考无效" },
+        { status: 400 }
+      )
+    }
+  } else if (replacing) {
+    segmentRefs = []
+    firstFrame = undefined
+    lastFrame = undefined
+  }
+
+  const mediaError = validateLongSegmentMedia({
+    capabilities,
+    clipIndex,
+    publicRefs: publicLockRefs(job),
+    segmentRefs,
+    firstFrame,
+    lastFrame,
+  })
+  if (mediaError) {
+    return Response.json({ error: mediaError }, { status: 400 })
+  }
+
+  const env = await evaluateLongWorkflowEnvironment(workflowFile)
   if (!env.ready) {
     return Response.json(
       { error: env.summary, code: "environment_incomplete", gaps: env.gaps },
@@ -189,6 +267,9 @@ export async function POST(
     seed,
     status: "waiting",
     enqueuedAt: now,
+    segmentRefs,
+    firstFrame,
+    lastFrame,
   }
   const nextSegments = [...segments.filter((item) => item.index !== clipIndex), segment].sort(
     (a, b) => a.index - b.index
@@ -206,6 +287,8 @@ export async function POST(
     height,
     steps,
     seed: busy ? job.seed : seed,
+    firstFrameName: firstFrame?.originalName ?? job.firstFrameName,
+    lastFrameName: lastFrame?.originalName ?? job.lastFrameName,
     clientId: busy ? job.clientId : newClientId(),
     enqueuedAt: busy ? job.enqueuedAt : now,
     error: busy ? job.error : undefined,
@@ -214,6 +297,7 @@ export async function POST(
     long: {
       ...job.long,
       lockPrompt,
+      lockFrozen: true,
       finalized: false,
       aspectLocked: true,
       segments: nextSegments,

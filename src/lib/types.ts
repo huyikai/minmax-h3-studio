@@ -132,7 +132,12 @@ export type LongSegment = {
   outputFile?: string
   outputUrl?: string
   error?: string
+  segmentRefs?: StoredInputMedia[]
+  firstFrame?: StoredInputMedia
+  lastFrame?: StoredInputMedia
 }
+
+export type MediaScope = "public" | "segment"
 
 export type StoredInputMedia = {
   slotId: string
@@ -141,6 +146,9 @@ export type StoredInputMedia = {
   contentType: string
   kind?: MediaKind
   index?: number
+  scope?: MediaScope
+  segmentIndex?: number
+  role?: MediaRole
 }
 
 export type StudioQueueItem = {
@@ -166,6 +174,8 @@ export type LongVideoState = {
   workflowFile?: string
   workflowKind?: LongVideoWorkflowKind
   lockPrompt: string
+  publicLockRefs?: StoredInputMedia[]
+  lockFrozen?: boolean
   finalized: boolean
   aspectLocked: boolean
   segments: LongSegment[]

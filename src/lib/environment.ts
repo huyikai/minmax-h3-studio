@@ -7,7 +7,7 @@ import {
   listModelFolder,
 } from "@/lib/comfy"
 import { validateComfyRoot, type ComfyLayout } from "@/lib/comfy-root"
-import { bundledWorkflow } from "@/lib/default-workflows"
+import { bundledWorkflow, longWorkflowCapabilities } from "@/lib/default-workflows"
 import type { EnvironmentGap, EnvironmentLine, EnvironmentStatus, ModelRow } from "@/lib/environment-types"
 import {
   extraDirHasFile,
@@ -320,5 +320,28 @@ export async function evaluateEnvironment(line: EnvironmentLine): Promise<Enviro
     disk: { free, need: needBytes, ok: diskOk },
     hfTokenSet: Boolean(settings.hfToken),
     summary,
+  }
+}
+
+export async function evaluateLongWorkflowEnvironment(workflowFile: string) {
+  const longEnv = await evaluateEnvironment("long")
+  const capabilities = longWorkflowCapabilities(workflowFile)
+  if (capabilities?.kind !== "r2v") return longEnv
+  const refEnv = await evaluateEnvironment("reference")
+  const gaps = [...longEnv.gaps]
+  for (const gap of refEnv.gaps) {
+    if (!gaps.some((item) => item.id === gap.id)) gaps.push(gap)
+  }
+  const models = [...longEnv.models]
+  for (const model of refEnv.models) {
+    if (!models.some((item) => item.id === model.id)) models.push(model)
+  }
+  const ready = longEnv.ready && refEnv.ready
+  return {
+    ...longEnv,
+    models,
+    gaps,
+    ready,
+    summary: ready ? longEnv.summary : (gaps[0]?.title ?? refEnv.summary),
   }
 }
