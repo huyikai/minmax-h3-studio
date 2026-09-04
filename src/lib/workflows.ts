@@ -3,6 +3,7 @@ import path from "node:path"
 import {
   BUNDLED_WORKFLOWS,
   isBundledWorkflow,
+  longWorkflowCapabilities,
   type WorkflowListItem,
 } from "@/lib/default-workflows"
 import { bundledWorkflowsDir, workflowsDir } from "@/lib/paths"
@@ -67,6 +68,7 @@ export async function listWorkflowEntries(): Promise<WorkflowListItem[]> {
     bundled: true,
     overridden: userSet.has(item.file),
     picker: item.picker !== false,
+    longCapabilities: item.family === "long" ? longWorkflowCapabilities(item.file) : undefined,
   }))
 
   for (const name of userFiles.sort((a, b) => a.localeCompare(b, "zh-CN"))) {

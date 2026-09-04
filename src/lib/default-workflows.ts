@@ -1,4 +1,29 @@
 import type { EnvironmentLine } from "@/lib/environment-types"
+import type { LongVideoWorkflowKind, MediaKind } from "@/lib/types"
+
+export type LongWorkflowCapabilities = {
+  kind: LongVideoWorkflowKind
+  motionContext: true
+  publicReferenceKinds: MediaKind[]
+  segmentReferenceKinds: MediaKind[]
+  supportsFirstFrame: boolean
+  supportsLastFrame: boolean
+}
+
+export const LONG_WORKFLOW_CAPABILITIES: Record<string, LongWorkflowCapabilities> = {
+  "h3-t2v-long.json": {
+    kind: "t2v",
+    motionContext: true,
+    publicReferenceKinds: [],
+    segmentReferenceKinds: [],
+    supportsFirstFrame: false,
+    supportsLastFrame: false,
+  },
+}
+
+export function longWorkflowCapabilities(name: string) {
+  return LONG_WORKFLOW_CAPABILITIES[name]
+}
 
 export type WorkflowFamily = "official" | "turbo" | "reference" | "long" | "custom"
 
@@ -18,6 +43,7 @@ export type WorkflowListItem = {
   bundled: boolean
   overridden: boolean
   picker?: boolean
+  longCapabilities?: LongWorkflowCapabilities
 }
 
 export const BUNDLED_WORKFLOWS: BundledWorkflow[] = [

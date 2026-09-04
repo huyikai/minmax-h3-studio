@@ -132,6 +132,12 @@ export function StudioApp() {
   const [guideOpen, setGuideOpen] = useState(false)
   const [guidePinned, setGuidePinned] = useState(false)
   const [monitorMode, setMonitorMode] = useState<MonitorMode>("current")
+  const [monitorAutoplay, setMonitorAutoplay] = useState(() =>
+    typeof window !== "undefined" && window.localStorage.getItem("minmax-h3:monitor-autoplay") === "true"
+  )
+  const [monitorMuted, setMonitorMuted] = useState(() =>
+    typeof window !== "undefined" && window.localStorage.getItem("minmax-h3:monitor-muted") === "true"
+  )
   const [pastSegmentIndex, setPastSegmentIndex] = useState<number | null>(null)
   const [focusSegmentIndex, setFocusSegmentIndex] = useState<number | null>(null)
   const lastSuccessIndexRef = useRef<number | undefined>(undefined)
@@ -154,6 +160,22 @@ export function StudioApp() {
   const eventSourceRef = useRef<EventSource | null>(null)
   const textareaRef = useRef<HTMLTextAreaElement>(null)
   const monitorRef = useRef<HTMLElement | null>(null)
+
+  useEffect(() => {
+    try {
+      window.localStorage.setItem("minmax-h3:monitor-autoplay", String(monitorAutoplay))
+    } catch {
+      // Ignore unavailable localStorage.
+    }
+  }, [monitorAutoplay])
+
+  useEffect(() => {
+    try {
+      window.localStorage.setItem("minmax-h3:monitor-muted", String(monitorMuted))
+    } catch {
+      // Ignore unavailable localStorage.
+    }
+  }, [monitorMuted])
 
   const connected = Boolean(health?.ok)
   const environmentLine: EnvironmentLine =
@@ -1076,6 +1098,7 @@ export function StudioApp() {
                   onSelect={(job) => void openJob(job)}
                   onDelete={(job) => setDeleteTargets([job])}
                   onDeleteMany={setDeleteTargets}
+                  muted={monitorMuted}
                 />
               </>
             )}
@@ -1134,7 +1157,7 @@ export function StudioApp() {
             <div className="flex min-h-0 flex-1 overflow-hidden p-3">
               <div className="flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden rounded-xl border bg-card">
                 {shell === "long" && liveJob && isLongJob(liveJob) ? (
-                  <LongWorkspace
+                      <LongWorkspace
                     key={liveJob.id}
                     job={liveJob}
                     submitting={submitting}
@@ -1148,10 +1171,28 @@ export function StudioApp() {
                     }}
                     onPromptChange={setPrompt}
                     onPromptFocus={() => setGuideOpen(true)}
-                    onGenerate={(payload) => submitLong(payload)}
-                    onFinalize={() => void finalizeLong(true)}
-                    onReopen={() => void finalizeLong(false)}
-                  />
+                        onGenerate={(payload) => submitLong(payload)}
+                        onFinalize={() => void finalizeLong(true)}
+                        onReopen={() => void finalizeLong(false)}
+                        workflows={workflows}
+                        onWorkflowChange={(name) => {
+                          if (!current || current.long?.segments.length) return
+                          void (async () => {
+                            const response = await fetch(`/api/jobs/${current.id}/workflow`, {
+                              method: "PUT",
+                              headers: { "Content-Type": "application/json" },
+                              body: JSON.stringify({ workflowFile: name }),
+                            })
+                            const json = (await response.json()) as { job?: PublicJob; error?: string }
+                            if (!response.ok || !json.job) {
+                              toast.error(json.error ?? "切换长视频工作流失败")
+                              return
+                            }
+                            setCurrent(json.job)
+                            setJobs((list) => [json.job!, ...list.filter((item) => item.id !== json.job!.id)])
+                          })()
+                        }}
+                      />
                 ) : (
                   <>
                     <div className="min-h-0 flex-1 overflow-y-auto px-4 py-4">
@@ -1244,6 +1285,10 @@ export function StudioApp() {
               duration={liveJob ? String(liveJob.duration) : duration}
               mode={monitorMode}
               onModeChange={setMonitorMode}
+              autoplay={monitorAutoplay}
+              muted={monitorMuted}
+              onAutoplayChange={setMonitorAutoplay}
+              onMutedChange={setMonitorMuted}
               pastSegmentIndex={pastSegmentIndex}
               onPastSegmentIndexChange={(index) => {
                 setPastSegmentIndex(index)

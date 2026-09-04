@@ -1,4 +1,5 @@
 import type { ApiWorkflow, Job, LongSegment, LongVideoState } from "@/lib/types"
+import { longWorkflowCapabilities } from "@/lib/default-workflows"
 
 export const LONG_T2V_FILE = "h3-t2v-long.json"
 
@@ -23,12 +24,45 @@ const LOCK_FIELD = "integrated_multimodal_description:"
 export const LATENT_MISSING_MESSAGE =
   "上一镜的 Motion Context 潜变量找不到。定稿后如果清理过 ComfyUI 的 output/h3_studio 目录，不能从第 1 段静默重来。请重做能接到的那一段，或另开一条长视频。"
 
+export function longWorkflowCapabilitiesForJob(
+  job: Pick<Job, "workflowFile" | "long">
+) {
+  return (
+    (job.long?.workflowFile
+      ? longWorkflowCapabilities(job.long.workflowFile)
+      : undefined) ??
+    longWorkflowCapabilities(job.workflowFile) ??
+    longWorkflowCapabilities(LONG_T2V_FILE)
+  )
+}
+
+export function longWorkflowIncompatibility(
+  workflowFile: string,
+  input: { hasReferences?: boolean; hasFirstFrame?: boolean; hasLastFrame?: boolean }
+) {
+  const capabilities = longWorkflowCapabilities(workflowFile)
+  if (!capabilities) return "缺少长视频能力声明"
+  if (input.hasReferences && capabilities.publicReferenceKinds.length === 0) {
+    return "当前任务包含参考元素，不支持文生长视频"
+  }
+  if (input.hasFirstFrame && !capabilities.supportsFirstFrame) return "不支持首帧"
+  if (input.hasLastFrame && !capabilities.supportsLastFrame) return "不支持当前段尾帧"
+  return undefined
+}
+
+
 export function isLongJob(job: Pick<Job, "kind">) {
   return job.kind === "long"
 }
 
-export function emptyLongState(lockPrompt = ""): LongVideoState {
+export function emptyLongState(
+  lockPrompt = "",
+  workflowFile = LONG_T2V_FILE
+): LongVideoState {
+  const capabilities = longWorkflowCapabilities(workflowFile)
   return {
+    workflowFile,
+    workflowKind: capabilities?.kind ?? "t2v",
     lockPrompt,
     finalized: false,
     aspectLocked: false,

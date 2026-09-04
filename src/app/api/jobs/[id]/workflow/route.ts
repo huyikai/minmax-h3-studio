@@ -1,9 +1,35 @@
 import fs from "node:fs/promises"
 import path from "node:path"
-import { getJob } from "@/lib/jobs"
+import { getJob, toPublicJob, upsertJob } from "@/lib/jobs"
+import { longWorkflowCapabilities } from "@/lib/default-workflows"
 import { jobOutputDir } from "@/lib/paths"
 
-export const dynamic = "force-dynamic"
+export async function PUT(
+  request: Request,
+  context: RouteContext<"/api/jobs/[id]/workflow">
+) {
+  const { id } = await context.params
+  const job = await getJob(id)
+  if (!job || job.kind !== "long" || !job.long) {
+    return Response.json({ error: "不是可配置的长视频任务" }, { status: 400 })
+  }
+  if (job.long.segments.length > 0) {
+    return Response.json({ error: "已有片段后不能切换工作流" }, { status: 409 })
+  }
+  const body = (await request.json()) as { workflowFile?: unknown }
+  const workflowFile = String(body.workflowFile ?? "")
+  const capabilities = longWorkflowCapabilities(workflowFile)
+  if (!capabilities?.motionContext) {
+    return Response.json({ error: "请选择包含 Motion Context 的长视频工作流" }, { status: 400 })
+  }
+  const saved = await upsertJob({
+    ...job,
+    workflowFile,
+    long: { ...job.long, workflowFile, workflowKind: capabilities.kind },
+  })
+  return Response.json({ job: toPublicJob(saved) })
+}
+
 
 export async function GET(
   _request: Request,

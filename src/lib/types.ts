@@ -160,7 +160,11 @@ export type StudioQueueSnapshot = {
   items: StudioQueueItem[]
 }
 
+export type LongVideoWorkflowKind = "t2v" | "i2v" | "r2v" | "f2v"
+
 export type LongVideoState = {
+  workflowFile?: string
+  workflowKind?: LongVideoWorkflowKind
   lockPrompt: string
   finalized: boolean
   aspectLocked: boolean

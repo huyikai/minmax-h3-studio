@@ -6,6 +6,7 @@ import { normalizeLora } from "@/lib/lora"
 import { listJobs, removeJobs, toPublicJob, upsertJob, getJob } from "@/lib/jobs"
 import { evaluateEnvironment, environmentLineFor } from "@/lib/environment"
 import { emptyLongState, LONG_T2V_FILE } from "@/lib/long-video"
+import { longWorkflowCapabilities } from "@/lib/default-workflows"
 import { persistUploadedMedia } from "@/lib/job-media"
 import { afterEnqueue, ensureBootPause, pumpQueue, queueSnapshot } from "@/lib/studio-queue"
 import { newClientId } from "@/lib/comfy"
@@ -140,6 +141,11 @@ export async function POST(request: Request) {
 }
 
 async function createLongJob(form: FormData) {
+  const workflowFile = String(form.get("workflowFile") || LONG_T2V_FILE)
+  const capabilities = longWorkflowCapabilities(workflowFile)
+  if (!capabilities?.motionContext) {
+    return Response.json({ error: "请选择包含 Motion Context 的长视频工作流" }, { status: 400 })
+  }
   const aspect = String(form.get("aspect") ?? "16:9")
   const megapixels = resolutionPreset(form.get("megapixels")) ?? 0.98
   const lockPrompt = String(form.get("lockPrompt") ?? "")
@@ -153,7 +159,7 @@ async function createLongJob(form: FormData) {
     updatedAt: now,
     status: "awaiting",
     kind: "long",
-    workflowFile: LONG_T2V_FILE,
+    workflowFile,
     prompt: "",
     duration: 0,
     aspect: preset.id,
@@ -164,7 +170,7 @@ async function createLongJob(form: FormData) {
     seed: 0,
     loras: [],
     clientId: newClientId(),
-    long: emptyLongState(lockPrompt),
+    long: emptyLongState(lockPrompt, workflowFile),
   }
   const saved = await upsertJob(job)
   return Response.json({ job: toPublicJob(saved) })

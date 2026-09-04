@@ -3,9 +3,9 @@
   "version": "0.1.0",
   "private": true,
   "scripts": {
-    "dev": "next dev --hostname 127.0.0.1 --port 17333",
+    "dev": "next dev --hostname 127.0.0.1",
     "build": "next build",
-    "start": "next start --hostname 127.0.0.1 --port 17333",
+    "start": "next start --hostname 127.0.0.1",
     "lint": "eslint",
     "mock:comfy": "node scripts/mock-comfyui.mjs",
     "dev:mock": "node scripts/dev-all.mjs"

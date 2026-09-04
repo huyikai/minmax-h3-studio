@@ -3,7 +3,7 @@ import { spawn } from "node:child_process"
 
 const processes = [
   spawn("pnpm", ["mock:comfy"], { stdio: "inherit" }),
-  spawn("pnpm", ["dev"], { stdio: "inherit" }),
+  spawn("pnpm", ["dev"], { stdio: "inherit", env: { ...process.env, PORT: process.env.PORT ?? "17333" } }),
 ]
 let shuttingDown = false
 

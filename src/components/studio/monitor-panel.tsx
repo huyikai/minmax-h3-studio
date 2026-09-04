@@ -1,12 +1,13 @@
 "use client"
 
-import { useEffect, useState } from "react"
-import { DownloadIcon, SquareIcon } from "lucide-react"
+import { useEffect, useRef, useState } from "react"
+import { DownloadIcon, PlayIcon, SquareIcon, Volume2Icon, VolumeXIcon } from "lucide-react"
 import { Button } from "@/components/ui/button"
 import { Progress } from "@/components/ui/progress"
 import { Spinner } from "@/components/ui/spinner"
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert"
 import { ToggleGroup, ToggleGroupItem } from "@/components/ui/toggle-group"
+import { Switch } from "@/components/ui/switch"
 import { isBusyJob, isLongJob, isWaitingJob, statusLabel } from "@/lib/job-view"
 import {
   displayNodeTitle,
@@ -231,6 +232,10 @@ export function MonitorPanel({
   onInterrupt,
   onRetryStitch,
   emptyHint,
+  autoplay,
+  muted,
+  onAutoplayChange,
+  onMutedChange,
 }: {
   job: PublicJob | null
   busy: boolean
@@ -244,6 +249,10 @@ export function MonitorPanel({
   onInterrupt?: () => void
   onRetryStitch?: () => void
   emptyHint: string
+  autoplay: boolean
+  muted: boolean
+  onAutoplayChange: (value: boolean) => void
+  onMutedChange: (value: boolean) => void
 }) {
   const ticking = Boolean(job && (busy || isWaitingJob(job)))
   const now = useTickingNow(ticking)
@@ -294,6 +303,18 @@ export function MonitorPanel({
           (item) => item.startsWith("本段") || item.startsWith("累计")
         )
       : []
+  const videoRef = useRef<HTMLVideoElement | null>(null)
+
+  useEffect(() => {
+    const video = videoRef.current
+    if (!video) return
+    video.muted = muted
+    video.defaultMuted = muted
+    video.autoplay = autoplay
+    if (autoplay) {
+      void video.play().catch(() => undefined)
+    }
+  }, [autoplay, muted, videoUrl])
 
   return (
     <div className="flex min-h-72 flex-1 flex-col overflow-hidden rounded-xl border bg-card">
@@ -344,6 +365,30 @@ export function MonitorPanel({
               中断
             </Button>
           ) : null}
+          <label className="flex items-center gap-1.5 text-xs text-muted-foreground">
+            <Switch
+              size="sm"
+              checked={autoplay}
+              onCheckedChange={onAutoplayChange}
+              aria-label="自动播放"
+            />
+            <PlayIcon className="size-3.5 sm:hidden" aria-hidden="true" />
+            <span className="hidden sm:inline">自动播放</span>
+          </label>
+          <label className="flex items-center gap-1.5 text-xs text-muted-foreground">
+            <Switch
+              size="sm"
+              checked={muted}
+              onCheckedChange={onMutedChange}
+              aria-label="静音"
+            />
+            {muted ? (
+              <VolumeXIcon className="size-3.5 sm:hidden" aria-hidden="true" />
+            ) : (
+              <Volume2Icon className="size-3.5 sm:hidden" aria-hidden="true" />
+            )}
+            <span className="hidden sm:inline">静音</span>
+          </label>
         </div>
       </div>
       {stripPhase && job ? (
@@ -413,8 +458,10 @@ export function MonitorPanel({
             key={videoUrl}
             className="max-h-[min(32rem,55dvh)] w-full object-contain"
             src={videoUrl}
+            ref={videoRef}
             controls
-            autoPlay
+            muted={muted}
+            playsInline
           />
         ) : !long && busy && job ? (
           <div className="relative z-10 flex w-full max-w-md flex-col items-center gap-4 p-8 text-center">

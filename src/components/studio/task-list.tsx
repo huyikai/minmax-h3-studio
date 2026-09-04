@@ -35,6 +35,7 @@ type TaskListProps = {
   onSelect: (job: PublicJob) => void
   onDelete: (job: PublicJob) => void
   onDeleteMany: (jobs: PublicJob[]) => void
+  muted?: boolean
 }
 
 export function TaskList({
@@ -44,6 +45,7 @@ export function TaskList({
   onSelect,
   onDelete,
   onDeleteMany,
+  muted = false,
 }: TaskListProps) {
   const [selecting, setSelecting] = useState(false)
   const [selected, setSelected] = useState<Set<string>>(new Set())
@@ -174,7 +176,7 @@ export function TaskList({
                     {preview ? (
                       <video
                         src={preview}
-                        muted
+                        muted={muted}
                         playsInline
                         preload="metadata"
                         className="size-full object-cover"

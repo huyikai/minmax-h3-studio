@@ -39,6 +39,7 @@ import { LabelWithHelp } from "@/components/studio/field-help"
 import { ASPECT_PRESETS, DURATION_OPTIONS, LONG_STEP_OPTIONS } from "@/lib/types"
 import { ResolutionPicker } from "@/components/studio/resolution-picker"
 import type { LongSegment, PublicJob } from "@/lib/types"
+import type { WorkflowListItem } from "@/lib/default-workflows"
 import { isBusyJob } from "@/lib/job-view"
 import {
   canDispatchLongSegment,
@@ -247,6 +248,8 @@ export function LongWorkspace({
   onGenerate,
   onFinalize,
   onReopen,
+  workflows,
+  onWorkflowChange,
 }: {
   job: PublicJob
   submitting: boolean
@@ -260,6 +263,8 @@ export function LongWorkspace({
   onGenerate: (payload: LongGeneratePayload) => Promise<boolean>
   onFinalize: () => void
   onReopen: () => void
+  workflows: WorkflowListItem[]
+  onWorkflowChange: (name: string) => void
 }) {
   const long = job.long
   const busy = isBusyJob(job)
@@ -478,6 +483,34 @@ export function LongWorkspace({
             />
           </Field>
 
+          <Field>
+            <LabelWithHelp label="长视频工作流">
+              创建后锁定。当前仅显示已接入 Motion Context 的长视频工作流。
+            </LabelWithHelp>
+            <div className="flex flex-col gap-1.5">
+              {workflows.filter((item) => item.family === "long").map((item) => (
+                <button
+                  key={item.name}
+                  type="button"
+                  disabled={readOnly}
+                  onClick={() => onWorkflowChange(item.name)}
+                  className={cn(
+                    "rounded-md border px-3 py-2 text-left text-sm transition-colors",
+                    job.workflowFile === item.name
+                      ? "border-primary bg-primary/10"
+                      : "border-border hover:bg-muted/50",
+                    readOnly && "cursor-not-allowed opacity-60"
+                  )}
+                >
+                  <span className="font-medium">{item.label}</span>
+                  <span className="mt-0.5 block text-xs text-muted-foreground">{item.description}</span>
+                </button>
+              ))}
+              {workflows.every((item) => item.family !== "long") ? (
+                <p className="text-xs text-muted-foreground">暂无其他长视频工作流。</p>
+              ) : null}
+            </div>
+          </Field>
           <Field>
             <div
               id="long-segment-list"
