@@ -7,6 +7,16 @@ import { jobOutputDir } from "@/lib/paths"
 import type { Job } from "@/lib/types"
 
 const TIMEOUT_MS = 5000
+const HEALTH_TIMEOUT_MS = 2000
+const HEALTH_CACHE_MS = 2000
+const HEALTH_STALE_MS = 15_000
+
+type ComfyResponse = {
+  ok: boolean
+  status: number
+  text: string
+  json(): unknown
+}
 
 export async function comfyBaseUrl() {
   const settings = await readSettings()
@@ -18,45 +28,76 @@ export async function comfyBaseUrl() {
   }
 }
 
-async function comfyFetch(pathname: string, init?: RequestInit) {
+async function comfyFetch(
+  pathname: string,
+  init?: RequestInit,
+  timeoutMs = TIMEOUT_MS
+): Promise<ComfyResponse> {
   const { http } = await comfyBaseUrl()
   const controller = new AbortController()
-  const timer = setTimeout(() => controller.abort(), TIMEOUT_MS)
+  const onAbort = () => controller.abort()
+  if (init?.signal) {
+    if (init.signal.aborted) controller.abort()
+    else init.signal.addEventListener("abort", onAbort, { once: true })
+  }
+  const timer = setTimeout(() => controller.abort(), timeoutMs)
   try {
     const response = await fetch(`${http}${pathname}`, {
       ...init,
-      signal: init?.signal ?? controller.signal,
+      signal: controller.signal,
       cache: "no-store",
     })
-    return response
+    const text = await response.text()
+    return {
+      ok: response.ok,
+      status: response.status,
+      text,
+      json() {
+        return JSON.parse(text)
+      },
+    }
   } finally {
     clearTimeout(timer)
+    init?.signal?.removeEventListener("abort", onAbort)
   }
 }
 
 export async function getQueue() {
-  const response = await comfyFetch("/queue")
+  const response = await comfyFetch("/queue", undefined, HEALTH_TIMEOUT_MS)
   if (!response.ok) {
     throw new Error(`ComfyUI /queue ${response.status}`)
   }
-  return (await response.json()) as {
+  return response.json() as {
     queue_running: unknown[]
     queue_pending: unknown[]
   }
 }
 
-export async function getHealth() {
+type HealthStatus = {
+  ok: boolean
+  host: string
+  port: number
+  queueRemaining: number
+  error?: string
+}
+
+let lastHealth: { at: number; value: HealthStatus } | undefined
+let healthInflight: Promise<HealthStatus> | undefined
+
+async function probeHealth(): Promise<HealthStatus> {
   const { host, port } = await comfyBaseUrl()
   try {
     const queue = await getQueue()
-    return {
+    const value = {
       ok: true,
       host,
       port,
       queueRemaining: queue.queue_running.length + queue.queue_pending.length,
     }
+    lastHealth = { at: Date.now(), value }
+    return value
   } catch (error) {
-    return {
+    const failed = {
       ok: false,
       host,
       port,
@@ -66,28 +107,49 @@ export async function getHealth() {
           ? error.message
           : "无法连接 ComfyUI，请确认本机服务已启动",
     }
+    if (lastHealth && Date.now() - lastHealth.at < HEALTH_STALE_MS && lastHealth.value.ok) {
+      return lastHealth.value
+    }
+    return failed
   }
+}
+
+export async function getHealth() {
+  if (lastHealth && Date.now() - lastHealth.at < HEALTH_CACHE_MS) {
+    return lastHealth.value
+  }
+  if (healthInflight) return healthInflight
+  healthInflight = probeHealth().finally(() => {
+    healthInflight = undefined
+  })
+  return healthInflight
 }
 
 export async function isMockComfy() {
   try {
     const response = await comfyFetch("/system_stats")
     if (!response.ok) return false
-    const json = (await response.json()) as { system?: { os?: string } }
+    const json = response.json() as { system?: { os?: string } }
     return json.system?.os === "mock"
   } catch {
     return false
   }
 }
 
+const nodeClassCache = new Map<string, { at: number; ok: boolean }>()
+
 export async function hasNodeClass(className: string) {
+  const hit = nodeClassCache.get(className)
+  if (hit && Date.now() - hit.at < 20_000) return hit.ok
   try {
     const response = await comfyFetch(
       `/object_info/${encodeURIComponent(className)}`
     )
     if (!response.ok) return false
-    const json = (await response.json()) as Record<string, unknown>
-    return Boolean(json[className])
+    const json = response.json() as Record<string, unknown>
+    const ok = Boolean(json[className])
+    nodeClassCache.set(className, { at: Date.now(), ok })
+    return ok
   } catch {
     return false
   }
@@ -97,7 +159,7 @@ export async function listModelFolder(folder: string) {
   try {
     const response = await comfyFetch(`/models/${encodeURIComponent(folder)}`)
     if (response.ok) {
-      const data = (await response.json()) as unknown
+      const data = response.json() as unknown
       if (Array.isArray(data)) {
         return data.filter((item): item is string => typeof item === "string")
       }
@@ -111,12 +173,12 @@ export async function listModelFolder(folder: string) {
 export async function listLoras() {
   const response = await comfyFetch("/models/loras")
   if (response.ok) {
-    const data = (await response.json()) as unknown
+    const data = response.json() as unknown
     if (Array.isArray(data)) return data.filter((item) => typeof item === "string")
   }
   const info = await comfyFetch("/object_info/LoraLoaderModelOnly")
   if (!info.ok) return []
-  const json = (await info.json()) as {
+  const json = info.json() as {
     LoraLoaderModelOnly?: {
       input?: { required?: { lora_name?: [string[]] } }
     }
@@ -150,19 +212,31 @@ export async function uploadInputFile(
   )
   form.set("overwrite", "true")
   form.set("type", "input")
-  const response = await fetch(`${http}/upload/image`, {
-    method: "POST",
-    body: form,
-  })
-  if (!response.ok) {
-    throw new Error(`${errorLabel}（${response.status}）`)
+  const controller = new AbortController()
+  const timer = setTimeout(() => controller.abort(), 60_000)
+  try {
+    const response = await fetch(`${http}/upload/image`, {
+      method: "POST",
+      body: form,
+      signal: controller.signal,
+    })
+    if (!response.ok) {
+      throw new Error(`${errorLabel}（${response.status}）`)
+    }
+    const json = (await response.json()) as {
+      name: string
+      subfolder?: string
+      type?: string
+    }
+    return json.subfolder ? `${json.subfolder}/${json.name}` : json.name
+  } catch (error) {
+    if (error instanceof Error && error.name === "AbortError") {
+      throw new Error(`${errorLabel}（超时）`)
+    }
+    throw error
+  } finally {
+    clearTimeout(timer)
   }
-  const json = (await response.json()) as {
-    name: string
-    subfolder?: string
-    type?: string
-  }
-  return json.subfolder ? `${json.subfolder}/${json.name}` : json.name
 }
 
 export async function submitPrompt(prompt: Record<string, unknown>, clientId: string) {
@@ -171,7 +245,7 @@ export async function submitPrompt(prompt: Record<string, unknown>, clientId: st
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ prompt, client_id: clientId }),
   })
-  const text = await response.text()
+  const text = response.text
   if (!response.ok) {
     throw new Error(parseComfyError(text, response.status))
   }
@@ -189,7 +263,7 @@ export async function interrupt() {
 export async function getHistory(promptId: string) {
   const response = await comfyFetch(`/history/${encodeURIComponent(promptId)}`)
   if (!response.ok) return undefined
-  const json = (await response.json()) as Record<
+  const json = response.json() as Record<
     string,
     {
       status?: { completed?: boolean; status_str?: string; messages?: unknown[] }
@@ -237,13 +311,25 @@ export async function downloadView(file: MediaFile) {
     type: file.type ?? "output",
   })
   const { http } = await comfyBaseUrl()
-  const response = await fetch(`${http}/view?${params.toString()}`, {
-    cache: "no-store",
-  })
-  if (!response.ok) {
-    throw new Error(`读取成片失败（${response.status}）`)
+  const controller = new AbortController()
+  const timer = setTimeout(() => controller.abort(), 120_000)
+  try {
+    const response = await fetch(`${http}/view?${params.toString()}`, {
+      cache: "no-store",
+      signal: controller.signal,
+    })
+    if (!response.ok) {
+      throw new Error(`读取成片失败（${response.status}）`)
+    }
+    return Buffer.from(await response.arrayBuffer())
+  } catch (error) {
+    if (error instanceof Error && error.name === "AbortError") {
+      throw new Error("读取成片超时")
+    }
+    throw error
+  } finally {
+    clearTimeout(timer)
   }
-  return Buffer.from(await response.arrayBuffer())
 }
 
 export async function saveJobOutput(

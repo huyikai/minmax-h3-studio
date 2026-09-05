@@ -401,9 +401,15 @@ export function StudioApp() {
         // 新建时再拉一次即可
       }
     })()
+    let polling = false
     const timer = setInterval(() => {
-      void loadHealth().catch(() => {})
-      void loadJobs().catch(() => {})
+      if (polling) return
+      polling = true
+      void Promise.all([loadHealth().catch(() => {}), loadJobs().catch(() => {})]).finally(
+        () => {
+          polling = false
+        }
+      )
     }, 4000)
     return () => {
       cancelled = true

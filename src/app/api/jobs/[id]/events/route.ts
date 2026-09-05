@@ -21,27 +21,34 @@ export async function GET(
   const stream = new ReadableStream({
     start(controller) {
       let last = ""
+      let ticking = false
       const tick = async () => {
-        const job = await getJob(id)
-        const payload = JSON.stringify({
-          job: job ? toPublicJob(job) : null,
-        })
-        if (payload !== last) {
-          last = payload
-          controller.enqueue(encoder.encode(`data: ${payload}\n\n`))
-        }
-        if (
-          job &&
-          (job.status === "success" ||
-            job.status === "error" ||
-            job.status === "interrupted" ||
-            job.status === "awaiting")
-        ) {
-          if (timer) clearInterval(timer)
-          controller.close()
-        }
-        if (job && (job.status === "queued" || job.status === "running")) {
-          ensureJobWatch(id)
+        if (ticking) return
+        ticking = true
+        try {
+          const job = await getJob(id)
+          const payload = JSON.stringify({
+            job: job ? toPublicJob(job) : null,
+          })
+          if (payload !== last) {
+            last = payload
+            controller.enqueue(encoder.encode(`data: ${payload}\n\n`))
+          }
+          if (
+            job &&
+            (job.status === "success" ||
+              job.status === "error" ||
+              job.status === "interrupted" ||
+              job.status === "awaiting")
+          ) {
+            if (timer) clearInterval(timer)
+            controller.close()
+          }
+          if (job && (job.status === "queued" || job.status === "running")) {
+            ensureJobWatch(id)
+          }
+        } finally {
+          ticking = false
         }
       }
       void tick()

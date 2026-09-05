@@ -154,8 +154,19 @@ export async function queueSnapshot(jobs?: Job[]): Promise<StudioQueueSnapshot> 
 }
 
 let pumpChain: Promise<void> = Promise.resolve()
+const globalForPump = globalThis as typeof globalThis & {
+  __h3StudioPump?: ReturnType<typeof setInterval>
+}
+
+export function ensureQueuePump() {
+  if (globalForPump.__h3StudioPump) return
+  globalForPump.__h3StudioPump = setInterval(() => {
+    void pumpQueue()
+  }, 2500)
+}
 
 export function pumpQueue() {
+  ensureQueuePump()
   pumpChain = pumpChain.then(() => pumpQueueInner()).catch(() => undefined)
   return pumpChain
 }

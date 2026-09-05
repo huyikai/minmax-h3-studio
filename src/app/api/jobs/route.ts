@@ -9,7 +9,7 @@ import { emptyLongState, LONG_T2V_FILE, longWorkflowIncompatibility, longWorkflo
 import { longWorkflowCapabilities } from "@/lib/default-workflows"
 import { persistLongMedia, persistUploadedMedia } from "@/lib/job-media"
 import { validateLongCreateMedia } from "@/lib/long-media"
-import { afterEnqueue, ensureBootPause, pumpQueue, queueSnapshot } from "@/lib/studio-queue"
+import { afterEnqueue, ensureBootPause, ensureQueuePump, pumpQueue, queueSnapshot } from "@/lib/studio-queue"
 import { newClientId } from "@/lib/comfy"
 import { readWorkflowBundle } from "@/lib/workflow-service"
 import { ensureJobWatch } from "@/lib/runner"
@@ -18,7 +18,7 @@ export const dynamic = "force-dynamic"
 
 export async function GET() {
   await ensureBootPause()
-  void pumpQueue()
+  ensureQueuePump()
   const jobs = await listJobs()
   for (const job of jobs) {
     if (job.status === "queued" || job.status === "running") {

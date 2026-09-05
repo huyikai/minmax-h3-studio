@@ -4,11 +4,22 @@ import type { Job, LongSegment, PublicJob } from "@/lib/types"
 import { dataDir, jobOutputDir, jobsPath } from "@/lib/paths"
 import { lastSuccessfulSegment, normalizeJob, successfulSegments } from "@/lib/long-video"
 
+let jobsLock: Promise<unknown> = Promise.resolve()
+
+function withJobsLock<T>(fn: () => Promise<T>): Promise<T> {
+  const run = jobsLock.then(fn, fn)
+  jobsLock = run.then(
+    () => undefined,
+    () => undefined
+  )
+  return run
+}
+
 async function ensure() {
   await fs.mkdir(dataDir(), { recursive: true })
 }
 
-export async function readJobs(): Promise<Job[]> {
+async function readJobsUnlocked(): Promise<Job[]> {
   await ensure()
   try {
     const raw = await fs.readFile(jobsPath(), "utf8")
@@ -19,7 +30,7 @@ export async function readJobs(): Promise<Job[]> {
   }
 }
 
-async function writeJobs(jobs: Job[]) {
+async function writeJobsUnlocked(jobs: Job[]) {
   await ensure()
   const target = jobsPath()
   const tmp = `${target}.tmp`
@@ -33,10 +44,14 @@ async function writeJobs(jobs: Job[]) {
       return
     } catch (error) {
       lastError = error
-      await new Promise((resolve) => setTimeout(resolve, 30 * (attempt + 1)))
+      await new Promise((resolve) => setTimeout(resolve, 40 * (attempt + 1)))
     }
   }
   throw lastError
+}
+
+export async function readJobs(): Promise<Job[]> {
+  return withJobsLock(() => readJobsUnlocked())
 }
 
 export async function getJob(id: string) {
@@ -45,13 +60,15 @@ export async function getJob(id: string) {
 }
 
 export async function upsertJob(job: Job) {
-  const jobs = await readJobs()
-  const index = jobs.findIndex((item) => item.id === job.id)
-  const next = { ...job, updatedAt: new Date().toISOString() }
-  if (index >= 0) jobs[index] = next
-  else jobs.unshift(next)
-  await writeJobs(jobs)
-  return next
+  return withJobsLock(async () => {
+    const jobs = await readJobsUnlocked()
+    const index = jobs.findIndex((item) => item.id === job.id)
+    const next = { ...job, updatedAt: new Date().toISOString() }
+    if (index >= 0) jobs[index] = next
+    else jobs.unshift(next)
+    await writeJobsUnlocked(jobs)
+    return next
+  })
 }
 
 export async function listJobs() {
@@ -70,24 +87,29 @@ export async function removeJob(id: string) {
 
 export async function removeJobs(ids: string[]) {
   const wanted = new Set(ids.filter((id) => typeof id === "string" && id.length > 0))
-  const jobs = await readJobs()
-  const deleted: string[] = []
-  const skipped: string[] = []
-  const keep: Job[] = []
-  for (const job of jobs) {
-    if (!wanted.has(job.id)) {
-      keep.push(job)
-      continue
+  const { deleted, skipped } = await withJobsLock(async () => {
+    const jobs = await readJobsUnlocked()
+    const deleted: string[] = []
+    const skipped: string[] = []
+    const keep: Job[] = []
+    for (const job of jobs) {
+      if (!wanted.has(job.id)) {
+        keep.push(job)
+        continue
+      }
+      if (isActiveStatus(job.status)) {
+        skipped.push(job.id)
+        keep.push(job)
+        continue
+      }
+      deleted.push(job.id)
     }
-    if (isActiveStatus(job.status)) {
-      skipped.push(job.id)
-      keep.push(job)
-      continue
+    if (deleted.length > 0) {
+      await writeJobsUnlocked(keep)
     }
-    deleted.push(job.id)
-  }
+    return { deleted, skipped }
+  })
   if (deleted.length > 0) {
-    await writeJobs(keep)
     await Promise.all(
       deleted.map((id) => fs.rm(jobOutputDir(id), { recursive: true, force: true }))
     )

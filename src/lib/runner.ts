@@ -35,10 +35,14 @@ async function watchJob(jobId: string) {
 
   const promptId = initial.comfyPromptId
   const labels = await readNodeLabels(jobId, initial.submittedWorkflowFile)
+  let lastProgressAt = 0
   const stop = subscribeComfyProgress(initial.clientId, promptId, async (event) => {
     const job = await getJob(jobId)
     if (!job || job.comfyPromptId !== promptId || !isBusyJob(job)) return
     if (event.type === "progress") {
+      const now = Date.now()
+      if (now - lastProgressAt < 300 && event.value < (event.max || 1)) return
+      lastProgressAt = now
       await upsertJob({
         ...withRunStart(job),
         status: "running",
