@@ -289,6 +289,22 @@ export function inspectLongWorkflowGraph(
   return { ok: issues.length === 0, issues, h3Id: h3?.[0], loadId: load?.[0], motionId: motion?.[0], saveId: save?.[0] }
 }
 
+export function h3RefInputKeys(
+  workflow: Record<string, { class_type: string; inputs: Record<string, unknown> }>
+) {
+  const h3 = Object.values(workflow).find(
+    (node) =>
+      node.class_type === "MiniMaxH3ImageToVideo" ||
+      node.class_type === "MiniMaxH3ReferenceToVideo"
+  )
+  const keys = Object.keys(h3?.inputs ?? {})
+  return {
+    images: keys.filter((key) => key.startsWith("ref_images.")),
+    videos: keys.filter((key) => key.startsWith("ref_videos.")),
+    audios: keys.filter((key) => key.startsWith("ref_audios.")),
+  }
+}
+
 export function firstFrameFilename(workflow: Record<string, { class_type: string; inputs: Record<string, unknown> }>) {
   const h3 = Object.values(workflow).find(
     (node) =>

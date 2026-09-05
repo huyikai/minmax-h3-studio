@@ -17,8 +17,10 @@ import {
   longWorkflowDisableReason,
   longWorkflowIncompatibility,
   mergeLockIntoPrompt,
+  nextClipIndex,
   normalizeJob,
   patchLongChain,
+  voidSegmentsAfter,
 } from "./long-video"
 import type { ApiWorkflow, Job } from "./types"
 
@@ -173,6 +175,44 @@ test("segment 2 loads previous motion context and saves the new clip", () => {
     0,
   ])
   assert.deepEqual(guider?.inputs.conditioning, [motion?.[0], 0])
+})
+
+test("rewriting a segment voids later ones and the next live clip is the rewritten index", () => {
+  const segments = [
+    {
+      index: 1,
+      prompt: "one",
+      submittedPrompt: "one",
+      duration: 5,
+      seed: 1,
+      status: "success" as const,
+    },
+    {
+      index: 2,
+      prompt: "two",
+      submittedPrompt: "two",
+      duration: 5,
+      seed: 2,
+      status: "success" as const,
+    },
+  ]
+  const voided = voidSegmentsAfter(segments, 1)
+  assert.equal(voided[0]?.status, "success")
+  assert.equal(voided[1]?.status, "voided")
+  const afterSuccess = [
+    { ...segments[0]!, status: "success" as const },
+    voided[1]!,
+  ]
+  assert.equal(
+    nextClipIndex({
+      workflowFile: LONG_T2V_FILE,
+      lockPrompt: "",
+      finalized: false,
+      aspectLocked: true,
+      segments: afterSuccess,
+    }),
+    2
+  )
 })
 
 test("T2V capabilities do not claim reference or frame support", () => {

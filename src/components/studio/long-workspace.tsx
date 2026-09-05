@@ -822,7 +822,7 @@ export function LongWorkspace({
           <Field>
             <div className="flex items-baseline justify-between gap-3">
               <LabelWithHelp htmlFor="long-prompt" label={`第 ${targetIndex} 段提示词`}>
-                官方文生字段。下一段先用大约 2 秒接住上一镜结尾，再开新动作（气闸）。
+                官方文生字段。要一镜到底：下一段先用大约 2 秒接住上一镜结尾，再开新动作。要切镜：直接写新镜头或给当前段尾帧，不要求接缝无缝。
               </LabelWithHelp>
               <span className="font-mono text-[11px] tabular-nums text-muted-foreground">
                 {prompt.length}
@@ -880,7 +880,7 @@ export function LongWorkspace({
                       kind: "image",
                       role: "lastFrame",
                       label: `第 ${targetIndex} 段尾帧`,
-                      help: "只接受图片，可空。只作用于当前段。",
+                      help: "只接受图片，可空。只作用于当前段。用来收束或切镜；后续段按新提示词继续，不要求接缝无缝。",
                       nodeId: "lastFrame",
                       input: "image",
                       h3NodeId: "",

@@ -9,7 +9,7 @@
 - `3878b13` Add validated R2V long-video workflow
 - `5543a09` Add validated FLF long-video workflow
 
-验证时间：2026-09-04，本机真实 ComfyUI（未使用 `pnpm dev:mock`）。
+验证时间：2026-09-04。第一轮白天，第二轮晚上。本机真实 ComfyUI（未使用 `pnpm dev:mock`）。
 
 Studio：`http://127.0.0.1:17333`
 
@@ -96,8 +96,8 @@ A woman in a crimson jacket and short black hair, daylight, handheld camera.
 - 本段参考：PASS，只出现在第 2 段
 - 拼接：PASS
 - 视觉连续：PASS。红西装、短发、同一条郊区街道与白巴士/银车位置衔接。第 1 段尾帧底部有一层模型烧字，接缝人物与场景仍连续
-- 音频参考连续段：NOT RUN
-- 视频参考连续段：NOT RUN
+- 音频参考连续段：见第二轮
+- 视频参考连续段：见第二轮
 
 ### 长视频 · 首尾帧链 `h3-flf-long.json`
 
@@ -109,25 +109,71 @@ A woman in a crimson jacket and short black hair, daylight, handheld camera.
 - `supportsMotionContextWithLastFrame`：true（已真实验证，未关闭）
 - 拼接：PASS
 - 视觉连续：PASS。红大衣、灰色高领、红砖街与停靠车辆在接缝两侧一致
-- 未跑组合：
-  - 第 1 段首帧+尾帧：NOT RUN
-  - 第 2 段 Motion Context、无尾帧：NOT RUN
+- 第二轮补跑：见下方「第 1 段首帧+尾帧 → 第 2 段仅 Motion Context」
+
+## 第二轮（2026-09-04 晚）
+
+脚本：`scripts/validate-long-remaining.mjs`。Studio 为重启后的 `pnpm dev`（非 mock）。参数仍为 16 步、0.4 MP、5s。
+
+### R2V 公共图 + 公共音频
+
+状态：**PASS**
+
+- 任务：`baf8811b-e020-4215-9599-f3747b6a4023`
+- 组合：创建时公共参考图 + 公共参考 wav（sine 440 Hz / 32 kHz）
+- 第 1 段：PASS。`MiniMaxH3ReferenceToVideo`；`ref_images.ref_image_0` + `ref_audios.ref_audio_0`；`LoadAudio` 存在；无 Load Latent
+- 第 2 段：PASS。同一公共图和公共音频再次注入；Load `clip_index=1`；Save `clip_index=2`
+- 输出音轨：两段均为 AAC 32 kHz（与 Motion Context 音频时钟一致）
+- 公共锁定：PASS
+- 拼接：PASS
+- 视觉连续：PASS。接缝两侧均为短发、深红夹克、林荫空路、浅景深
+
+### R2V 公共图 + 公共视频
+
+状态：**PASS**
+
+- 任务：`8df172ab-9aa8-4d7f-a8e7-675a8c205d57`
+- 组合：创建时公共参考图 + 公共参考 mp4
+- 第 1 段：PASS。`ref_images.ref_image_0` + `ref_videos.ref_video_0`；`LoadVideo` 存在
+- 第 2 段：PASS。公共图和公共视频再次注入；Motion Context 从上一镜 Load
+- 拼接：PASS
+- 视觉连续：PASS。红大衣、黑白横纹内搭、斜挎带、石墙铁门与行道树在接缝两侧一致
+
+### FLF 第 1 段首帧+尾帧 → 第 2 段仅 Motion Context
+
+状态：**PASS**（生成、图结构、按尾帧切镜）
+
+- 任务：`2cb79e64-77bf-481b-bd31-b7c4059f6e70`
+- 第 1 段：PASS。`first_frame` 与 `last_frame` 均已接。抽出的首帧是 testsrc 彩条，尾帧是纯色尾帧夹具 `0x1E3F8B`，说明首尾帧都写进了成片
+- 第 2 段：PASS。无 `first_frame`、无 `last_frame`；Load + Motion Context + Save `clip_index=2`
+- 拼接文件：PASS `stitched.mp4`
+- 镜头：切镜，符合尾帧。第 1 段收到纯蓝场，第 2 段按新提示词回到人物与街道。长视频允许切镜或一镜到底，由提示词和尾帧决定，不把切镜记成失败
+
+### T2V 重写第 1 段后重建 Motion Context
+
+状态：**PASS**
+
+- 任务：`fbf672cf-5a1c-4ae6-b1b6-c6290c04cf7e`
+- 先成功生成第 1、2 段，再 `redoIndex=1`
+- 重写提交后第 2 段状态为 `voided`，第 1 段重新排队
+- 重写后的第 1 段：PASS。无 Load；Save `clip_index=1`；prompt 含 shop window
+- 重建第 2 段：PASS。Load `clip_index=1`，`latent_path=h3_studio/<jobId>`；Save `clip_index=2`
+- 拼接：PASS
+- 视觉连续：PASS。重写后两段仍是红夹克短发、橱窗玻璃与卷帘门同一条街
 
 ## 未跑 / 未声称支持
 
 | 项 | 状态 | 原因 |
 | --- | --- | --- |
-| R2V 公共/本段音频 | NOT RUN | 本轮只验证了图片参考与 Motion Context 同时工作。代码已按限额接入音频，但没有两段真实音频链 |
-| R2V 视频参考 | NOT RUN | 同上 |
-| FLF 第 1 段同时首尾帧 | NOT RUN | 已验证「仅首帧」以及「第 2 段 MC+尾帧」 |
-| 重写第 1 段后重建 Context 链 | NOT RUN | 服务端仍按原逻辑 void 后续段；本轮未再烧一张 GPU 重做 |
-| 0.98 MP / 20 步生产档 | NOT RUN | 本机连续四套两段链使用 0.4 MP / 16 步以避免显存排队过长 |
+| 0.98 MP / 20 步生产档 | NOT RUN | 两轮真实链均使用 0.4 MP / 16 步 |
+| R2V 仅音频、无参考图 | NOT RUN | 本轮音频链始终带公共参考图（身份） |
+| R2V 仅视频、无参考图 | NOT RUN | 本轮视频链始终带公共参考图 |
 
 短视频原始 JSON 未改：`h3-t2v.json`、`h3-i2v.json`、`h3-r2v.json`、`h3-flf.json`。
 
 ## 失败
 
-无。本轮没有 `FAIL` 的两段链。
+无。本轮没有 `FAIL` 的生成链。FLF 尾帧后续写出现切镜，按提示词/尾帧视为通过，不记失败。
 
 过程中 `data/jobs.json` 在 Windows 上偶发 `EPERM rename`。已改为 `copyFile` 重试写入，验证后半段进度与完成状态正常。
 

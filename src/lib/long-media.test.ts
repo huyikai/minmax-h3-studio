@@ -8,6 +8,7 @@ import {
   longWorkflowCapabilities,
 } from "./default-workflows"
 import {
+  h3RefInputKeys,
   mergeLongRefs,
   storedMediaForSegment,
   validateLongCreateMedia,
@@ -118,6 +119,49 @@ test("I2V segment 1 requires a first frame and later segments reject it", () => 
     },
   })
   assert.equal(later, "后续段首帧由 Motion Context 提供，不要再上传首帧")
+})
+
+test("FLF segment 1 can take first and last frames together", () => {
+  const caps = longWorkflowCapabilities(LONG_FLF_FILE)!
+  const error = validateLongSegmentMedia({
+    capabilities: caps,
+    clipIndex: 1,
+    publicRefs: [],
+    segmentRefs: [],
+    firstFrame: {
+      slotId: "firstFrame",
+      file: "start.png",
+      originalName: "start.png",
+      contentType: "image/png",
+      kind: "image",
+      role: "firstFrame",
+    },
+    lastFrame: {
+      slotId: "lastFrame",
+      file: "end.png",
+      originalName: "end.png",
+      contentType: "image/png",
+      kind: "image",
+      role: "lastFrame",
+    },
+  })
+  assert.equal(error, undefined)
+})
+
+test("R2V submitted graphs keep public audio and video refs on the H3 node", () => {
+  const keys = h3RefInputKeys({
+    "136": {
+      class_type: "MiniMaxH3ReferenceToVideo",
+      inputs: {
+        "ref_images.ref_image_0": ["301", 0],
+        "ref_videos.ref_video_0": ["302", 0],
+        "ref_audios.ref_audio_0": ["303", 0],
+      },
+    },
+  })
+  assert.deepEqual(keys.images, ["ref_images.ref_image_0"])
+  assert.deepEqual(keys.videos, ["ref_videos.ref_video_0"])
+  assert.deepEqual(keys.audios, ["ref_audios.ref_audio_0"])
 })
 
 test("FLF last frame on later segments requires motion-context compatibility", () => {
