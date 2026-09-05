@@ -164,6 +164,31 @@ test("R2V submitted graphs keep public audio and video refs on the H3 node", () 
   assert.deepEqual(keys.audios, ["ref_audios.ref_audio_0"])
 })
 
+test("R2V allows public audio or video without an image", () => {
+  const audio: StoredInputMedia = {
+    slotId: "refAudio:0",
+    file: "a.wav",
+    originalName: "a.wav",
+    contentType: "audio/wav",
+    kind: "audio",
+    index: 0,
+    scope: "public",
+    role: "refAudio",
+  }
+  const video: StoredInputMedia = {
+    slotId: "refVideo:0",
+    file: "v.mp4",
+    originalName: "v.mp4",
+    contentType: "video/mp4",
+    kind: "video",
+    index: 0,
+    scope: "public",
+    role: "refVideo",
+  }
+  assert.equal(validateLongCreateMedia({ workflowFile: LONG_R2V_FILE, publicRefs: [audio] }), undefined)
+  assert.equal(validateLongCreateMedia({ workflowFile: LONG_R2V_FILE, publicRefs: [video] }), undefined)
+})
+
 test("FLF last frame on later segments requires motion-context compatibility", () => {
   const caps = longWorkflowCapabilities(LONG_FLF_FILE)!
   const ok = validateLongSegmentMedia({

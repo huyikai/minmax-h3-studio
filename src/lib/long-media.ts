@@ -244,7 +244,8 @@ export function buildSegmentMediaRecord(
 export function inspectLongWorkflowGraph(
   workflow: Record<string, { class_type: string; inputs: Record<string, unknown> }>,
   clipIndex: number,
-  jobId: string
+  jobId: string,
+  options: { shotCut?: boolean } = {}
 ) {
   const byClass = (classType: string) =>
     Object.entries(workflow).find(([, node]) => node.class_type === classType)
@@ -262,11 +263,12 @@ export function inspectLongWorkflowGraph(
   if (save && save[1].inputs.clip_index !== clipIndex) {
     issues.push(`Save Latent clip_index 应为 ${clipIndex}`)
   }
-  if (clipIndex <= 1) {
-    if (load) issues.push("第 1 段不应加载上一镜 Latent")
-    if (motion) issues.push("第 1 段不应接入 Motion Context")
+  const loadPrevious = clipIndex > 1 && !options.shotCut
+  if (!loadPrevious) {
+    if (load) issues.push("切镜或第 1 段不应加载上一镜 Latent")
+    if (motion) issues.push("切镜或第 1 段不应接入 Motion Context")
   } else {
-    if (!load) issues.push("第 2 段缺少 Load Latent")
+    if (!load) issues.push("续写段缺少 Load Latent")
     else {
       if (load[1].inputs.clip_index !== clipIndex - 1) {
         issues.push(`Load Latent clip_index 应为 ${clipIndex - 1}`)
@@ -275,15 +277,12 @@ export function inspectLongWorkflowGraph(
         issues.push("Load Latent 路径应指向当前任务")
       }
     }
-    if (!motion) issues.push("第 2 段缺少 Motion Context")
+    if (!motion) issues.push("续写段缺少 Motion Context")
     else if (load) {
       const ctx = motion[1].inputs.context_latent
       if (!Array.isArray(ctx) || String(ctx[0]) !== load[0]) {
         issues.push("Motion Context 未使用 Load Latent 输出")
       }
-    }
-    if (save && save[1].inputs.clip_index !== clipIndex) {
-      issues.push(`Save Latent clip_index 应为 ${clipIndex}`)
     }
   }
   return { ok: issues.length === 0, issues, h3Id: h3?.[0], loadId: load?.[0], motionId: motion?.[0], saveId: save?.[0] }

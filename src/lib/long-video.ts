@@ -170,6 +170,7 @@ export function normalizeLongSegment(segment: LongSegment): LongSegment {
   return {
     ...segment,
     segmentRefs: segment.segmentRefs ?? [],
+    shotCut: Boolean(segment.shotCut),
   }
 }
 

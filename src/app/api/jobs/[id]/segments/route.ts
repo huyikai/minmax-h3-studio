@@ -31,12 +31,17 @@ type Body = {
   seed?: number
   lockPrompt?: string
   redoIndex?: number
+  shotCut?: boolean
 }
 
 function parseSteps(value: unknown, fallback: number) {
   const numeric = Number(value)
   if ((LONG_STEP_OPTIONS as readonly number[]).includes(numeric)) return numeric
   return fallback
+}
+
+function parseShotCut(value: unknown) {
+  return value === true || value === "true" || value === "1" || value === "on"
 }
 
 async function parseBody(request: Request): Promise<{ body: Body; form?: FormData }> {
@@ -58,6 +63,7 @@ async function parseBody(request: Request): Promise<{ body: Body; form?: FormDat
           redoRaw !== null && redoRaw !== "" && Number.isInteger(Number(redoRaw))
             ? Number(redoRaw)
             : undefined,
+        shotCut: parseShotCut(form.get("shotCut")),
       },
     }
   }
@@ -259,6 +265,7 @@ export async function POST(
 
   const submittedPrompt = mergeLockIntoPrompt(lockPrompt, prompt)
   const now = new Date().toISOString()
+  const shotCut = clipIndex > 1 && parseShotCut(body.shotCut)
   const segment: LongSegment = {
     index: clipIndex,
     prompt,
@@ -270,6 +277,7 @@ export async function POST(
     segmentRefs,
     firstFrame,
     lastFrame,
+    shotCut,
   }
   const nextSegments = [...segments.filter((item) => item.index !== clipIndex), segment].sort(
     (a, b) => a.index - b.index

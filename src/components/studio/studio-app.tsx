@@ -612,6 +612,7 @@ export function StudioApp() {
       form.set("seed", String(payload.seed))
       form.set("steps", String(payload.steps))
       if (payload.redoIndex !== undefined) form.set("redoIndex", String(payload.redoIndex))
+      if (payload.shotCut) form.set("shotCut", "true")
       if (payload.firstFrame) form.set("segment:firstFrame", payload.firstFrame)
       if (payload.lastFrame) form.set("segment:lastFrame", payload.lastFrame)
       const counts = { image: 0, video: 0, audio: 0 }

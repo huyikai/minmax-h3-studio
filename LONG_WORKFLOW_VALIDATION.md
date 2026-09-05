@@ -161,13 +161,45 @@ A woman in a crimson jacket and short black hair, daylight, handheld camera.
 - 拼接：PASS
 - 视觉连续：PASS。重写后两段仍是红夹克短发、橱窗玻璃与卷帘门同一条街
 
+## 第三轮（2026-09-05）
+
+脚本：`scripts/validate-long-final.mjs`、`scripts/validate-long-shotcut.mjs`。Studio 重启后 `pnpm dev`。切镜与一镜到底都按需求实现：默认接 Motion Context；打开「切镜」则不加载上一镜。
+
+### R2V 仅公共音频（无参考图）
+
+状态：**PASS**
+
+- 任务：`f721681f-c895-4201-9f17-91e2271cbac1`
+- 两段均只有 `ref_audios.ref_audio_0`，无 `ref_images`；仍是 `MiniMaxH3ReferenceToVideo`
+- 拼接：PASS
+
+### R2V 仅公共视频（无参考图）
+
+状态：**PASS**
+
+- 任务：`cb715e9a-52a1-4cf8-a783-e50b6431df4b`
+- 两段均只有 `ref_videos.ref_video_0`，无参考图
+- 拼接：PASS
+
+### T2V 生产档 0.98 MP / 20 步（提示词想切镜，未开切镜开关）
+
+状态：**PASS**（生成）；镜头：**一镜到底**
+
+- 任务：`1cf38919-f5a2-482d-a08c-2e16c1c57513`
+- 分辨率：1344×768，Save/Load 正常，拼接 PASS
+- 第 2 段提示词写了 cafe 特写硬切，但 Motion Context 仍加载上一镜，画面继续街道行走。说明只改提示词不能关掉接镜
+
+### T2V 打开切镜开关
+
+状态：**PASS**（硬切）
+
+- 任务：`891c451f-ffd3-403c-8e48-44ee8f1ce4b1`
+- 第 2 段 `shotCut=true`；提交 JSON 无 Load / Motion Context；Save `clip_index=2`
+- 第 1 段尾：郊外空路中景；第 2 段首：窗边室内特写。切镜成立，人物锁定文本仍在
+
 ## 未跑 / 未声称支持
 
-| 项 | 状态 | 原因 |
-| --- | --- | --- |
-| 0.98 MP / 20 步生产档 | NOT RUN | 两轮真实链均使用 0.4 MP / 16 步 |
-| R2V 仅音频、无参考图 | NOT RUN | 本轮音频链始终带公共参考图（身份） |
-| R2V 仅视频、无参考图 | NOT RUN | 本轮视频链始终带公共参考图 |
+无待进行的长视频能力项。可选的 25 步未再单独烧 GPU（20 步生产档已通过）。
 
 短视频原始 JSON 未改：`h3-t2v.json`、`h3-i2v.json`、`h3-r2v.json`、`h3-flf.json`。
 

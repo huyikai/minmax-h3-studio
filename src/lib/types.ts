@@ -135,6 +135,7 @@ export type LongSegment = {
   segmentRefs?: StoredInputMedia[]
   firstFrame?: StoredInputMedia
   lastFrame?: StoredInputMedia
+  shotCut?: boolean
 }
 
 export type MediaScope = "public" | "segment"

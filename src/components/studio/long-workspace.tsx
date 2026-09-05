@@ -244,6 +244,7 @@ export type LongGeneratePayload = {
   firstFrame?: File
   lastFrame?: File
   segmentRefs?: RefDraft[]
+  shotCut?: boolean
 }
 
 export type LongCreatePayload = {
@@ -322,6 +323,7 @@ export function LongWorkspace({
   const [segmentDrafts, setSegmentDrafts] = useState<RefDraft[]>([])
   const [firstFrameFile, setFirstFrameFile] = useState<SlotFile | undefined>()
   const [lastFrameFile, setLastFrameFile] = useState<SlotFile | undefined>()
+  const [shotCut, setShotCut] = useState(false)
   const segmentRefs = useRef<Record<number, HTMLLIElement | null>>({})
   const segmentListRef = useRef<HTMLDivElement | null>(null)
   const editorScrollRef = useRef<HTMLDivElement | null>(null)
@@ -477,6 +479,7 @@ export function LongWorkspace({
     setDuration(String(segment.duration))
     setSeed(segment.seed)
     setRandomize(false)
+    setShotCut(Boolean(segment.shotCut))
     setRedoConfirmIndex(null)
   }
 
@@ -494,6 +497,7 @@ export function LongWorkspace({
       firstFrame: firstFrameFile?.file,
       lastFrame: lastFrameFile?.file,
       segmentRefs: segmentDrafts,
+      shotCut: targetIndex > 1 && shotCut,
     })
     if (!ok) return
     onPromptChange("")
@@ -521,6 +525,7 @@ export function LongWorkspace({
     setFirstFrameFile(undefined)
     setLastFrameFile(undefined)
     setSegmentDrafts([])
+    setShotCut(false)
   }
 
   function addDrafts(
@@ -822,7 +827,7 @@ export function LongWorkspace({
           <Field>
             <div className="flex items-baseline justify-between gap-3">
               <LabelWithHelp htmlFor="long-prompt" label={`第 ${targetIndex} 段提示词`}>
-                官方文生字段。要一镜到底：下一段先用大约 2 秒接住上一镜结尾，再开新动作。要切镜：直接写新镜头或给当前段尾帧，不要求接缝无缝。
+                官方文生字段。要一镜到底：关掉切镜，下一段先接住上一镜再开新动作。要硬切：打开切镜，这一段不加载上一镜 Motion Context。只改提示词时仍会接上一镜。
               </LabelWithHelp>
               <span className="font-mono text-[11px] tabular-nums text-muted-foreground">
                 {prompt.length}
@@ -850,6 +855,22 @@ export function LongWorkspace({
                     : "先创建任务并锁住公共设定，再写第 1 段。"}
             </FieldDescription>
           </Field>
+
+          {created && targetIndex > 1 ? (
+            <Field>
+              <div className="flex items-center justify-between gap-3">
+                <LabelWithHelp htmlFor="long-shot-cut" label="切镜">
+                  打开后这一段不加载上一镜 Motion Context，适合硬切新镜头。关掉则一镜到底。
+                </LabelWithHelp>
+                <Switch
+                  id="long-shot-cut"
+                  checked={shotCut}
+                  onCheckedChange={setShotCut}
+                  disabled={readOnly}
+                />
+              </div>
+            </Field>
+          ) : null}
 
           {created && (showFirstFrame || showLastFrame || segmentKinds.length > 0) ? (
             <div className="flex flex-col gap-3">

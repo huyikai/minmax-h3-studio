@@ -215,6 +215,28 @@ test("rewriting a segment voids later ones and the next live clip is the rewritt
   )
 })
 
+test("a later shot-cut segment does not load previous motion context", () => {
+  const raw = fs.readFileSync(
+    path.join(process.cwd(), "templates/workflows/h3-t2v-long.json"),
+    "utf8"
+  )
+  const workflow = JSON.parse(raw) as ApiWorkflow
+  const patched = patchLongChain(workflow, {
+    jobId: "job-1",
+    clipIndex: 2,
+    loadPrevious: false,
+  })
+  const classes = Object.values(patched).map((node) => node.class_type)
+  assert.equal(classes.includes("MiniMaxH3MotionContextLoadLatent"), false)
+  assert.equal(classes.includes("MiniMaxH3MotionContext"), false)
+  const save = Object.values(patched).find(
+    (node) => node.class_type === "MiniMaxH3MotionContextSaveLatent"
+  )
+  assert.equal(save?.inputs.clip_index, 2)
+  const guider = Object.values(patched).find((node) => node.class_type === "BasicGuider")
+  assert.deepEqual(guider?.inputs.conditioning, ["104", 0])
+})
+
 test("T2V capabilities do not claim reference or frame support", () => {
   const caps = longWorkflowCapabilities(LONG_T2V_FILE)
   assert.equal(caps?.validated, true)

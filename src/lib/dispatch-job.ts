@@ -115,7 +115,7 @@ async function dispatchLong(job: Job, segmentIndex?: number) {
     {
       jobId: job.id,
       clipIndex: segment.index,
-      loadPrevious: segment.index > 1,
+      loadPrevious: segment.index > 1 && !segment.shotCut,
     }
   )
   const submittedPath = await writeSubmittedWorkflow(job.id, patched)
