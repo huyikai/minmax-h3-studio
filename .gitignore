@@ -45,6 +45,3 @@ next-env.d.ts
 /outputs
 /workflows/*.json
 /scripts/fixtures
-/scripts/long-workflow-validation-results.json
-/scripts/long-workflow-remaining-results.json
-/scripts/long-workflow-final-results.json
